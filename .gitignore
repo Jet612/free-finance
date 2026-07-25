@@ -1,0 +1,33 @@
+# Dependencies and build output
+node_modules/
+.next/
+out/
+coverage/
+
+# Vercel local project metadata
+.vercel/
+
+# Local environment files; keep only the documented template
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local provider credentials and session state
+*.pickle
+*.pkl
+.plaid-token.json
+
+# Editors and operating systems
+.DS_Store
+*.swp
+.idea/
+.vscode/
