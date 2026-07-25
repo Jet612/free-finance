@@ -209,7 +209,7 @@ export default async function SetupPage() {
           <CardContent>
             <div className="rounded-xl border bg-muted/35 p-4 font-mono text-xs leading-6">
               <p className="text-muted-foreground"># Connect Plaid once</p>
-              <p>.venv/bin/python scripts/plaid_link.py</p>
+              <p>.venv/bin/python scripts/plaid_link.py --github</p>
               <p className="mt-3 text-muted-foreground"># Verify and sync</p>
               <p>.venv/bin/python scripts/sync.py</p>
             </div>
