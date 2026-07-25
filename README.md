@@ -421,7 +421,7 @@ python -m pip install --upgrade pip
 python -m pip install -r scripts/requirements.txt
 
 # Link a Plaid Item and test each source without writes
-python scripts/plaid_link.py
+python scripts/plaid_link.py --github
 python scripts/sync.py --source plaid --dry-run
 python scripts/sync.py --source robinhood --dry-run
 
