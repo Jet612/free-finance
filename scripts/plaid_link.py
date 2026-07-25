@@ -91,7 +91,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def publish_to_github(access_token: str, environment: str) -> bool:
+def publish_to_github(
+    client_id: str,
+    secret: str,
+    access_token: str,
+    environment: str,
+) -> bool:
     """Send secrets over stdin so credentials never enter shell history."""
     if not shutil.which("gh"):
         print(
@@ -100,13 +105,18 @@ def publish_to_github(access_token: str, environment: str) -> bool:
         )
         return False
     try:
-        subprocess.run(
-            ["gh", "secret", "set", "PLAID_ACCESS_TOKEN"],
-            cwd=ROOT,
-            input=access_token,
-            text=True,
-            check=True,
-        )
+        for name, value in {
+            "PLAID_CLIENT_ID": client_id,
+            "PLAID_SECRET": secret,
+            "PLAID_ACCESS_TOKEN": access_token,
+        }.items():
+            subprocess.run(
+                ["gh", "secret", "set", name],
+                cwd=ROOT,
+                input=value,
+                text=True,
+                check=True,
+            )
         subprocess.run(
             ["gh", "variable", "set", "PLAID_ENV", "--body", environment],
             cwd=ROOT,
@@ -118,7 +128,7 @@ def publish_to_github(access_token: str, environment: str) -> bool:
             file=sys.stderr,
         )
         return False
-    print("GitHub Actions received PLAID_ACCESS_TOKEN and PLAID_ENV.")
+    print("GitHub Actions received the Plaid credentials and PLAID_ENV.")
     return True
 
 
@@ -206,7 +216,10 @@ def main() -> int:
                 "without printing it."
             )
             if args.github and not publish_to_github(
-                exchange.access_token, environment
+                client_id,
+                secret,
+                exchange.access_token,
+                environment,
             ):
                 return 1
             print(
@@ -221,7 +234,10 @@ def main() -> int:
                 "Plaid update completed. The existing access token remains valid."
             )
             if args.github and not publish_to_github(
-                existing_access_token, environment
+                client_id,
+                secret,
+                existing_access_token,
+                environment,
             ):
                 return 1
             return 0

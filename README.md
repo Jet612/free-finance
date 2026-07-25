@@ -219,8 +219,8 @@ Sandbox Items cannot be moved to Production. They are disposable test data.
    The helper will create a Hosted Link session, open it in a browser, let you
    select Bank of America, exchange the one-time public token on the local
    machine, save the resulting `PLAID_ACCESS_TOKEN` only to `.env.local`, and
-   securely send it to GitHub Actions over standard input. Omit `--github` if
-   GitHub CLI is not authenticated yet.
+   securely send it and the matching Plaid keys to GitHub Actions over standard
+   input. Omit `--github` if GitHub CLI is not authenticated yet.
 
 6. Confirm the connection without printing the access token:
 
