@@ -22,15 +22,14 @@ linked official pricing and plan pages before relying on that target.
 
 ## Project status
 
-The project is being built in four documented steps:
+The initial end-to-end implementation is complete:
 
 - [x] Step 1 — setup guide and environment contract
-- [ ] Step 2 — PostgreSQL schema and Drizzle migrations
-- [ ] Step 3 — Plaid/Robinhood Python sync and GitHub Actions workflow
-- [ ] Step 4 — Next.js dashboard, charts, theme, and setup status page
+- [x] Step 2 — PostgreSQL schema, RLS, indexes, and Drizzle migrations
+- [x] Step 3 — Plaid/Robinhood Python sync and GitHub Actions workflow
+- [x] Step 4 — authenticated Next.js dashboard, charts, theme, and setup status
 
-Commands that reference application, migration, or sync files will become
-available as the corresponding step is added.
+The dashboard is intentionally empty until a provider completes its first sync.
 
 ## Architecture
 
@@ -150,7 +149,7 @@ and [API-key guide](https://supabase.com/docs/guides/getting-started/api-keys).
 > bypass Row Level Security. Never put them in a `NEXT_PUBLIC_` variable, browser
 > component, screenshot, issue, or build log.
 
-After Step 2 is present, create the tables:
+Create the tables:
 
 ```bash
 corepack enable
@@ -181,7 +180,7 @@ before creating test production Items.
    PLAID_ENV=sandbox
    ```
 
-3. In Step 3, run the Plaid linking helper to create a Sandbox Item and write its
+3. Run the Plaid linking helper to create a Sandbox Item and write its
    access token to `.env.local`.
 4. Run a manual sync and confirm that sample accounts and transactions reach
    Supabase before using a real account.
@@ -211,15 +210,17 @@ Sandbox Items cannot be moved to Production. They are disposable test data.
    PLAID_SECRET=<your-production-secret>
    ```
 
-5. After Step 3 is present, run:
+5. Run:
 
    ```bash
-   python scripts/plaid_link.py
+   .venv/bin/python scripts/plaid_link.py --github
    ```
 
    The helper will create a Hosted Link session, open it in a browser, let you
    select Bank of America, exchange the one-time public token on the local
-   machine, and save the resulting `PLAID_ACCESS_TOKEN` only to `.env.local`.
+   machine, save the resulting `PLAID_ACCESS_TOKEN` only to `.env.local`, and
+   securely send it to GitHub Actions over standard input. Omit `--github` if
+   GitHub CLI is not authenticated yet.
 
 6. Confirm the connection without printing the access token:
 
@@ -251,7 +252,7 @@ transfer, or cancel-order operations.
    ROBINHOOD_TOTP_SECRET=<alphanumeric-totp-seed>
    ```
 
-4. After Step 3 is present, test locally:
+4. Test locally:
 
    ```bash
    python scripts/sync.py --source robinhood --dry-run
@@ -297,6 +298,7 @@ Create this **repository variable** under the Variables tab:
 | Variable | Value |
 | --- | --- |
 | `PLAID_ENV` | `sandbox` during testing, then `production` for Bank of America |
+| `APP_TIMEZONE` | An IANA timezone such as `America/New_York` |
 
 GitHub documents the UI flow in
 [Using secrets in GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
@@ -314,6 +316,7 @@ gh secret set ROBINHOOD_USERNAME
 gh secret set ROBINHOOD_PASSWORD
 gh secret set ROBINHOOD_TOTP_SECRET
 gh variable set PLAID_ENV
+gh variable set APP_TIMEZONE
 ```
 
 Skip the three Robinhood commands when Robinhood sync is disabled. Verify names,
@@ -323,8 +326,6 @@ not values:
 gh secret list
 gh variable list
 ```
-
-After Step 3 adds `.github/workflows/sync.yml`:
 
 1. Push it to the repository's default branch.
 2. Open **Actions → Daily finance sync → Run workflow**.
@@ -340,9 +341,8 @@ processing. See the current
 
 ## 6. Deploy to Vercel in under five minutes
 
-This section assumes Steps 2–4 are complete, the database migration succeeded,
-and the code is pushed to GitHub. Plaid and Robinhood credentials do **not** go to
-Vercel.
+This section assumes the database migration succeeded and the code is pushed to
+GitHub. Plaid and Robinhood credentials do **not** go to Vercel.
 
 1. Open the [Vercel dashboard](https://vercel.com/new).
 2. Select **Add New → Project**, connect GitHub if needed, and import this private
@@ -402,8 +402,6 @@ value belongs.
 No variable currently needs a `NEXT_PUBLIC_` prefix.
 
 ## Local commands
-
-These commands will be enabled as implementation steps land:
 
 ```bash
 # Install the web application
@@ -493,22 +491,20 @@ Confirm that `sync.yml` exists on the default branch and the workflow is enabled
 GitHub may delay scheduled runs. Public repositories also have inactivity rules,
 which is another reason this financial repository should be private.
 
-## Planned repository layout
+## Repository layout
 
 ```text
 .
-├── app/                        # Next.js App Router pages
-│   ├── (dashboard)/
-│   ├── login/
-│   └── setup/
-├── components/                 # shadcn/ui and dashboard components
-├── db/
-│   ├── schema.ts               # Drizzle schema
-│   └── migrations/             # Versioned SQL migrations
-├── lib/                        # Database, auth, queries, formatting
+├── src/
+│   ├── app/                    # Next.js App Router pages and actions
+│   ├── components/             # shadcn/ui and dashboard components
+│   ├── db/                     # Drizzle schema and lazy database client
+│   └── lib/                    # Auth, dashboard queries, and formatting
+├── drizzle/                    # Versioned PostgreSQL migrations
 ├── scripts/
 │   ├── plaid_link.py           # One-time local Plaid bootstrap
 │   ├── sync.py                 # Idempotent daily sync
+│   ├── test_sync.py            # Provider normalization unit tests
 │   └── requirements.txt
 ├── .github/workflows/sync.yml  # Daily and manual GitHub Action
 ├── .env.example
