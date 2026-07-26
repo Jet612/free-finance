@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      web-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: pip
+    directory: /scripts
+    schedule:
+      interval: weekly
+    groups:
+      sync-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      workflow-actions:
+        patterns:
+          - "*"

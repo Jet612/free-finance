@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LayoutDashboard, Settings2 } from "lucide-react";
+import { LayoutDashboard, Settings2, ShieldCheck } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/setup", label: "Connections", icon: Settings2 },
+  { href: "/security", label: "Security", icon: ShieldCheck },
 ];
 
 export function NavLinks({ onNavigate }: { onNavigate?: () => void }) {

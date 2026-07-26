@@ -15,10 +15,11 @@ provider's free-tier limits**. Provider limits and terms can change, so check th
 linked official pricing and plan pages before relying on that target.
 
 > [!IMPORTANT]
-> This repository is for a private, single-user deployment. It handles financial
-> data and credentials that can access real accounts. Keep the repository private,
-> use unique secrets, enable MFA on every provider, and never expose a value from
-> `.env.local` to browser code.
+> This source repository is intentionally public and designed to be forked.
+> Public source is safe; public secrets are not. Every installer must keep their
+> database URLs, service keys, provider tokens, owner user ID, and GitHub token in
+> `.env.local` or encrypted deployment secrets—never in commits, screenshots,
+> issues, Actions logs, or browser bundles.
 
 ## Project status
 
@@ -35,7 +36,8 @@ The dashboard is intentionally empty until a provider completes its first sync.
 
 ```mermaid
 flowchart LR
-    User["Single dashboard user"] -->|"HTTPS + password session"| Vercel["Next.js on Vercel"]
+    User["Single dashboard user"] -->|"Password or passkey; optional TOTP"| Auth["Supabase Auth"]
+    Auth -->|"Secure cookie session"| Vercel["Next.js on Vercel"]
     Vercel -->|"Pooled, server-only PostgreSQL"| Supabase["Supabase PostgreSQL"]
     Actions["Scheduled GitHub Action"] --> Sync["Python sync engine"]
     Sync -->|"Transactions + balances"| Plaid["Plaid Trial"]
@@ -45,9 +47,10 @@ flowchart LR
 
 The boundaries are intentional:
 
-- Vercel receives the database runtime URL, dashboard authentication secrets,
-  and an optional repository-scoped token for the **Sync now** button. It does
-  not receive bank or brokerage credentials.
+- Vercel receives the database runtime URL, publishable Supabase Auth
+  configuration, the one allowed Auth user ID, and an optional repository-scoped
+  token for the **Sync now** button. It does not receive bank or brokerage
+  credentials.
 - GitHub Actions receives the Plaid, Robinhood, and Supabase sync secrets.
 - Browser code receives no financial-provider or database secrets.
 - Drizzle uses Supabase's transaction pooler for short-lived Vercel functions.
@@ -96,23 +99,14 @@ brew install plaid/plaid-cli/plaid
 
 ## 1. Prepare local configuration
 
-Clone your private repository, then create the untracked local environment file:
+Fork this public template (or clone it directly), then create the untracked local
+environment file:
 
 ```bash
-git clone <your-private-repository-url>
+git clone <your-fork-url>
 cd free-finance
 cp .env.example .env.local
 ```
-
-Generate a cookie-signing secret:
-
-```bash
-openssl rand -hex 32
-```
-
-Paste the result into `SESSION_SECRET` in `.env.local`. Choose a unique dashboard
-password of at least 16 characters for `DASHBOARD_PASSWORD`. Both variables are
-server-only; neither may use the `NEXT_PUBLIC_` prefix.
 
 The committed `.gitignore` excludes `.env.local`, Python virtual environments,
 Robinhood session files, and Vercel's local project metadata.
@@ -160,6 +154,66 @@ pnpm db:migrate
 
 Run migrations locally with `DATABASE_MIGRATION_URL`; do not run migrations in
 every Vercel build or scheduled sync.
+
+### Configure single-tenant Supabase Auth
+
+Free Finance has no signup route. Each deployment accepts exactly one manually
+provisioned Supabase user, and the server compares every authenticated session to
+that user's immutable UUID.
+
+1. Open **Authentication → Users → Add user → Create new user**.
+2. Enter the owner's email and a unique password. Enable automatic email
+   confirmation for this manually created account.
+3. Copy the user's UUID into `DASHBOARD_USER_ID`.
+4. Open **Project Settings → API Keys** and copy:
+   - Project URL → both `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_URL`.
+   - Publishable key (`sb_publishable_...`) →
+     `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+   - Secret key (`sb_secret_...`) → `SUPABASE_SECRET_KEY`.
+5. Under **Authentication → Sign In / Providers → Email**, disable public user
+   signup. Also leave anonymous sign-ins and manual identity linking disabled.
+6. Set the Auth **Site URL** to the final production URL and add redirect URLs
+   for `https://your-domain.example/**` and `http://localhost:3000/**`.
+7. Under **Authentication → Multi-Factor**, enable TOTP and the setting that
+   limits first-factor-only sessions to 15 minutes.
+
+The publishable URL and key are designed to be visible in browser code. They do
+not bypass Row Level Security. `DASHBOARD_USER_ID`, database URLs, and the secret
+key are server-only even though a UUID is not an authentication credential.
+
+#### Optional passkeys
+
+Passkeys are not forced. Password login always remains available.
+
+1. Choose the final production or custom domain **before** anyone enrolls a
+   passkey. Changing the relying-party ID later invalidates existing passkeys.
+2. In Supabase's Passkeys settings, enable passkeys.
+3. Set the relying-party ID to the hostname only, such as
+   `finance.example.com`, and add the exact HTTPS origin, such as
+   `https://finance.example.com`.
+4. Deploy, sign in once with the Supabase password, open **Security**, and click
+   **Add passkey**.
+
+WebAuthn binds a passkey to the configured domain. A production relying-party ID
+cannot also enroll from `localhost`; use the deployed HTTPS site for enrollment
+or a separate local Supabase project. Supabase currently marks its
+[passkey support as experimental](https://supabase.com/docs/guides/auth/passkeys),
+so this repository pins a compatible client version and Dependabot proposes
+updates for review.
+
+#### Optional authenticator MFA
+
+TOTP is also a per-user choice. The **Security** page can display a one-time QR
+code and verify a six-digit code from 1Password, Authy, Google Authenticator, or
+another compatible app. After at least one TOTP factor is verified, every new
+password or passkey session must complete TOTP at AAL2. Removing the last factor
+returns the account to password/passkey-only login.
+
+Supabase does not provide TOTP recovery codes. Keep control of the Supabase
+project, retain the password, and preferably register two passkeys before relying
+on passwordless access. If locked out, the project owner can remove a factor or
+reset the user from the Supabase dashboard. See
+[Supabase's TOTP MFA guide](https://supabase.com/docs/guides/auth/auth-mfa/totp).
 
 ## 3. Set up Plaid Trial and connect Bank of America
 
@@ -284,7 +338,8 @@ Robinhood is optional. Leave `ROBINHOOD_SESSION_B64` empty to skip that source.
 
 ## 5. Add GitHub Actions secrets
 
-Keep the repository private. On GitHub, open:
+The repository may remain public. GitHub Actions secrets are encrypted and are
+not exposed to workflows triggered from another user's fork. On GitHub, open:
 
 **Repository → Settings → Secrets and variables → Actions**
 
@@ -372,8 +427,7 @@ This section assumes the database migration succeeded and the code is pushed to
 GitHub. Plaid and Robinhood credentials do **not** go to Vercel.
 
 1. Open the [Vercel dashboard](https://vercel.com/new).
-2. Select **Add New → Project**, connect GitHub if needed, and import this private
-   repository.
+2. Select **Add New → Project**, connect GitHub if needed, and import your fork.
 3. Keep the detected framework as **Next.js** and the root directory as `.`.
 4. Under **Environment Variables**, add only:
 
@@ -382,16 +436,18 @@ GitHub. Plaid and Robinhood credentials do **not** go to Vercel.
    | `APP_NAME` | Production |
    | `APP_TIMEZONE` | Production |
    | `DATABASE_URL` | Production |
-   | `DASHBOARD_PASSWORD` | Production |
-   | `SESSION_SECRET` | Production |
+   | `NEXT_PUBLIC_SUPABASE_URL` | Production |
+   | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Production |
+   | `DASHBOARD_USER_ID` | Production |
    | `GITHUB_SYNC_REPOSITORY` | Production |
    | `GITHUB_SYNC_TOKEN` | Production |
 
 5. Click **Deploy**.
-6. Open the generated `vercel.app` URL and sign in with
-   `DASHBOARD_PASSWORD`.
+6. Open the generated `vercel.app` URL and sign in using the email/password for
+   the manually provisioned Supabase user.
 7. Check `/setup` to confirm that the database is reachable and to see the last
    successful Plaid and Robinhood sync timestamps.
+8. Open `/security` to optionally add passkeys and TOTP.
 
 The final two variables enable the dashboard's **Sync now** button:
 
@@ -428,8 +484,9 @@ value belongs.
 | `APP_TIMEZONE` | No | Yes | Yes | No | Month boundaries and displayed timestamps |
 | `DATABASE_URL` | Yes | Yes | Yes | No | Vercel/runtime transaction-pooler URI |
 | `DATABASE_MIGRATION_URL` | Yes | Yes | No | No | Local migration session-pooler URI |
-| `DASHBOARD_PASSWORD` | Yes | Yes | Yes | No | Single-user dashboard login |
-| `SESSION_SECRET` | Yes | Yes | Yes | No | Signs the dashboard session cookie |
+| `NEXT_PUBLIC_SUPABASE_URL` | No | Yes | Yes | No | Browser-safe Supabase Auth URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | No | Yes | Yes | No | Browser-safe Auth key; RLS still applies |
+| `DASHBOARD_USER_ID` | Private config | Yes | Yes | No | Exact allowed Supabase Auth user UUID |
 | `GITHUB_SYNC_TOKEN` | Yes | Optional | Optional | No | Dispatches manual syncs server-side |
 | `GITHUB_SYNC_REPOSITORY` | No | Optional | Optional | No | GitHub `owner/repository` target |
 | `SUPABASE_URL` | Treat as config | Yes | No | Yes | Supabase Data API base URL |
@@ -443,7 +500,9 @@ value belongs.
 | `ROBINHOOD_SESSION_B64` | Yes | Optional | No | Optional | Reusable read-only sync session |
 | `LOG_LEVEL` | No | Yes | No | Workflow default | Python log verbosity |
 
-No variable currently needs a `NEXT_PUBLIC_` prefix.
+Only the two explicitly named Supabase publishable values use `NEXT_PUBLIC_`.
+Never add that prefix to a database URL, secret key, provider credential, GitHub
+token, or owner ID.
 
 ## Local commands
 
@@ -480,16 +539,28 @@ development while using injected environment variables in GitHub Actions.
 
 ## Security and operating notes
 
-- Use a private GitHub repository and restrict Vercel's GitHub App to this
-  repository where practical.
+- A public repository is supported and is the intended distribution model. Keep
+  `.env.local` ignored and store all per-instance credentials in GitHub,
+  Supabase, or Vercel secret managers.
+- Restrict Vercel's GitHub App and any fine-grained token to the smallest
+  practical repository and permission set.
 - Protect GitHub, Supabase, Vercel, Plaid, Robinhood, and your password manager
   with MFA.
 - Do not paste secrets into command arguments, commit messages, screenshots, or
   support tickets. Prompted CLI input is safer than inline values.
 - Rotate a key immediately if it appears in Git history or logs. Deleting the
   local file is not enough after a secret has been committed.
-- Keep the dashboard password unique. The application will use a signed,
-  HTTP-only, same-site cookie and will not store that password in PostgreSQL.
+- Keep the Supabase password unique. Auth sessions use secure, HTTP-only cookies,
+  and every protected server path revalidates the user and exact owner UUID.
+- Public signup is disabled. Passkeys and TOTP are opt-in; an enrolled TOTP
+  factor is then enforced for future sessions.
+- Set a 12-character-or-longer password in Supabase. Leaked-password screening
+  is plan-dependent; if the dashboard does not offer it on the Free plan, use a
+  password manager to generate a unique password and prefer a passkey.
+- Financial tables have Row Level Security enabled with no browser policies or
+  grants. Only the server database connection and sync secret can read them.
+- Production responses use a nonce-based Content Security Policy, HSTS,
+  anti-framing, no-store caching, and restrictive browser permissions.
 - The Python process will redact known secret values and avoid logging full bank
   account numbers, Plaid tokens, or Robinhood responses.
 - The app is a tracker, not an execution platform. No money movement or trading
@@ -541,7 +612,9 @@ linking helper converts the approved login into the reusable session.
 
 Confirm that `sync.yml` exists on the default branch and the workflow is enabled.
 GitHub may delay scheduled runs. Public repositories also have inactivity rules,
-which is another reason this financial repository should be private.
+so GitHub can disable a schedule after an extended period without repository
+activity. Re-enable it from the Actions tab if needed; manual runs still provide
+a quick verification.
 
 ## Repository layout
 

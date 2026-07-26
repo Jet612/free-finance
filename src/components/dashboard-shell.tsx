@@ -22,7 +22,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="border-t p-4">
           <div className="mb-3 flex items-center gap-2 px-2 text-xs text-muted-foreground">
             <LockKeyhole className="size-3.5 text-primary" />
-            Server-only financial data
+            Supabase Auth · server-only data
           </div>
           <form action={logout}>
             <Button

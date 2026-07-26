@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Database, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Database, Fingerprint, LockKeyhole } from "lucide-react";
 import { redirect } from "next/navigation";
 
 import { Brand } from "@/components/brand";
@@ -38,8 +38,8 @@ export default async function LoginPage() {
           </div>
           <div className="grid gap-3 text-xs text-muted-foreground">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="size-4 text-primary" />
-              Signed, HTTP-only session
+              <Fingerprint className="size-4 text-primary" />
+              Optional passkey and authenticator MFA
             </div>
             <div className="flex items-center gap-2">
               <Database className="size-4 text-primary" />
@@ -66,8 +66,8 @@ export default async function LoginPage() {
           <CardContent>
             <LoginForm />
             <p className="mt-5 text-center text-[11px] leading-5 text-muted-foreground">
-              No account registration. The password comes from your server
-              environment.
+              Registration is closed. An owner creates the single account in
+              Supabase.
             </p>
           </CardContent>
         </Card>
