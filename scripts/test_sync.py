@@ -1,9 +1,17 @@
+import base64
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest import TestCase
 
 from scripts.plaid_link import find_public_tokens, plaid_api_error_message
-from scripts.sync import decimal, plaid_account_row, plaid_transaction_row
+from scripts.sync import (
+    SyncError,
+    decimal,
+    decode_robinhood_session,
+    plaid_account_row,
+    plaid_transaction_row,
+)
 
 
 class SyncNormalizationTests(TestCase):
@@ -83,3 +91,26 @@ class SyncNormalizationTests(TestCase):
         self.assertIn("rejected the API keys for Production", message)
         self.assertIn("secret may belong to Sandbox", message)
         self.assertIn("activate Plaid Trial", message)
+
+    def test_robinhood_session_decodes_validated_credentials(self) -> None:
+        payload = {
+            "version": 1,
+            "access_token": "access",
+            "token_type": "Bearer",
+            "refresh_token": "refresh",
+            "device_token": "device",
+        }
+        encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+
+        session = decode_robinhood_session(encoded)
+
+        self.assertEqual(session["access_token"], "access")
+        self.assertEqual(session["device_token"], "device")
+
+    def test_robinhood_session_rejects_missing_credentials(self) -> None:
+        encoded = base64.b64encode(
+            json.dumps({"version": 1, "access_token": "access"}).encode()
+        ).decode()
+
+        with self.assertRaises(SyncError):
+            decode_robinhood_session(encoded)
