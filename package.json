@@ -10,12 +10,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test:subscriptions": "tsx --test src/lib/subscription-detection.test.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "check": "pnpm lint && pnpm typecheck && pnpm build"
+    "check": "pnpm test:subscriptions && pnpm lint && pnpm typecheck && pnpm build"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.3",

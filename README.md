@@ -52,10 +52,25 @@ deeper tools only when they are needed:
   optional TOTP MFA.
 
 Subscription detection is a local heuristic, not a paid enrichment service, so
-it is intentionally labeled as an estimate. Plaid only supplies transaction
-times for some institutions and transaction types; when it returns only a
-posting date, Free Finance displays **Time unavailable** instead of inventing an
-ordering.
+it is intentionally labeled as an estimate. It does not call Plaid's optional
+[Recurring Transactions endpoint](https://plaid.com/docs/api/products/transactions/#transactionsrecurringget).
+The strict local defaults are:
+
+- Non-annual matches require at least three recent charges; annual matches
+  require two yearly renewals.
+- Every recent interval must match the same cadence. A median interval alone is
+  not enough.
+- Every amount must stay within 3% or $0.25 of the median, whichever is larger.
+- A stream disappears shortly after its next expected renewal is missed.
+- Rent, loans, transfers, usage-based household bills, food, travel, ride
+  shares, and ordinary repeat purchases are excluded from automatic detection.
+
+You can dismiss an incorrect automatic match or create a manual subscription
+from any synced debit and choose its frequency. Dismissals keep that stream
+hidden across syncs; manual entries remain until you remove them. Both stay only
+in your private Postgres database. Plaid supplies transaction times for only
+some institutions and transaction types; when it returns only a posting date,
+Free Finance displays **Time unavailable** instead of inventing an ordering.
 
 ## Architecture
 
