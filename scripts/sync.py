@@ -1053,7 +1053,10 @@ def parse_args() -> argparse.Namespace:
         "--source",
         choices=("all", "plaid", "robinhood"),
         default="all",
-        help="Provider to sync (default: all configured providers).",
+        help=(
+            "Provider to sync. Plaid always includes Robinhood when linked; "
+            "robinhood remains available for brokerage-only troubleshooting."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -1066,6 +1069,17 @@ def parse_args() -> argparse.Namespace:
         help="Check Supabase access and print safe configuration status.",
     )
     return parser.parse_args()
+
+
+def selected_sources(source: str, settings: Settings) -> list[str]:
+    """Keep every Plaid refresh paired with Robinhood when it is linked."""
+    if source == "robinhood":
+        return ["robinhood"]
+
+    selected = ["plaid"]
+    if settings.robinhood_configured:
+        selected.append("robinhood")
+    return selected
 
 
 def main() -> int:
@@ -1107,13 +1121,7 @@ def main() -> int:
         )
         return 0
 
-    selected: list[str]
-    if args.source == "all":
-        selected = ["plaid"]
-        if settings.robinhood_configured:
-            selected.append("robinhood")
-    else:
-        selected = [args.source]
+    selected = selected_sources(args.source, settings)
 
     results: list[bool] = []
     for source in selected:

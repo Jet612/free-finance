@@ -20,11 +20,51 @@ from scripts.sync import (
     parse_plaid_cursor_state,
     plaid_account_row,
     plaid_transaction_row,
+    selected_sources,
     sync_plaid,
 )
 
 
 class SyncNormalizationTests(TestCase):
+    def test_plaid_selection_also_runs_linked_robinhood(self) -> None:
+        settings = Settings(
+            supabase_url="https://example.supabase.co",
+            supabase_secret_key="secret",
+            plaid_environment="production",
+            plaid_client_id="client",
+            plaid_secret="secret",
+            plaid_access_tokens=("access",),
+            plaid_country_codes=("US",),
+            robinhood_session_b64="linked-session",
+        )
+
+        self.assertEqual(
+            selected_sources("plaid", settings),
+            ["plaid", "robinhood"],
+        )
+        self.assertEqual(
+            selected_sources("all", settings),
+            ["plaid", "robinhood"],
+        )
+        self.assertEqual(
+            selected_sources("robinhood", settings),
+            ["robinhood"],
+        )
+
+    def test_plaid_selection_skips_unlinked_robinhood(self) -> None:
+        settings = Settings(
+            supabase_url="https://example.supabase.co",
+            supabase_secret_key="secret",
+            plaid_environment="production",
+            plaid_client_id="client",
+            plaid_secret="secret",
+            plaid_access_tokens=("access",),
+            plaid_country_codes=("US",),
+            robinhood_session_b64="",
+        )
+
+        self.assertEqual(selected_sources("plaid", settings), ["plaid"])
+
     def test_plaid_credit_balance_is_a_liability(self) -> None:
         account = SimpleNamespace(
             account_id="credit-1",
