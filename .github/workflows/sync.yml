@@ -42,9 +42,7 @@ jobs:
       PLAID_CLIENT_ID: ${{ secrets.PLAID_CLIENT_ID }}
       PLAID_SECRET: ${{ secrets.PLAID_SECRET }}
       PLAID_ACCESS_TOKEN: ${{ secrets.PLAID_ACCESS_TOKEN }}
-      ROBINHOOD_USERNAME: ${{ secrets.ROBINHOOD_USERNAME }}
-      ROBINHOOD_PASSWORD: ${{ secrets.ROBINHOOD_PASSWORD }}
-      ROBINHOOD_TOTP_SECRET: ${{ secrets.ROBINHOOD_TOTP_SECRET }}
+      ROBINHOOD_SESSION_B64: ${{ secrets.ROBINHOOD_SESSION_B64 }}
 
     steps:
       - name: Check out repository

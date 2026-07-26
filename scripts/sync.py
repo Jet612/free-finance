@@ -8,13 +8,12 @@ and a provider cursor advances only after every corresponding write succeeds.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
 import os
-import signal
 import sys
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -24,8 +23,8 @@ from typing import Any, Callable, Iterator, Sequence
 from zoneinfo import ZoneInfo
 
 import plaid
-import pyotp
 import robin_stocks.robinhood as robinhood
+import robin_stocks.robinhood.authentication as robinhood_auth
 from dotenv import load_dotenv
 from plaid.api import plaid_api
 from plaid.api_client import ApiClient
@@ -48,6 +47,12 @@ load_dotenv(ROOT / ".env.local", override=False)
 LOGGER = logging.getLogger("free-finance-sync")
 UTC = timezone.utc
 TABLE_BATCH_SIZE = 400
+ROBINHOOD_SESSION_FIELDS = (
+    "access_token",
+    "token_type",
+    "refresh_token",
+    "device_token",
+)
 
 
 class SyncError(RuntimeError):
@@ -62,9 +67,7 @@ class Settings:
     plaid_client_id: str
     plaid_secret: str
     plaid_access_token: str
-    robinhood_username: str
-    robinhood_password: str
-    robinhood_totp_secret: str
+    robinhood_session_b64: str
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -75,9 +78,9 @@ class Settings:
             plaid_client_id=os.getenv("PLAID_CLIENT_ID", "").strip(),
             plaid_secret=os.getenv("PLAID_SECRET", "").strip(),
             plaid_access_token=os.getenv("PLAID_ACCESS_TOKEN", "").strip(),
-            robinhood_username=os.getenv("ROBINHOOD_USERNAME", "").strip(),
-            robinhood_password=os.getenv("ROBINHOOD_PASSWORD", "").strip(),
-            robinhood_totp_secret=os.getenv("ROBINHOOD_TOTP_SECRET", "").strip(),
+            robinhood_session_b64=os.getenv(
+                "ROBINHOOD_SESSION_B64", ""
+            ).strip(),
         )
 
     @property
@@ -88,13 +91,7 @@ class Settings:
 
     @property
     def robinhood_configured(self) -> bool:
-        return all(
-            (
-                self.robinhood_username,
-                self.robinhood_password,
-                self.robinhood_totp_secret,
-            )
-        )
+        return bool(self.robinhood_session_b64)
 
     def validate_database(self) -> None:
         if not self.supabase_url or not self.supabase_secret_key:
@@ -112,18 +109,11 @@ class Settings:
             raise SyncError("PLAID_ENV must be either sandbox or production.")
 
     def validate_robinhood(self) -> None:
-        values = (
-            self.robinhood_username,
-            self.robinhood_password,
-            self.robinhood_totp_secret,
-        )
-        if any(values) and not all(values):
-            raise SyncError(
-                "Robinhood is partially configured. Set all three ROBINHOOD_* "
-                "variables or leave all three empty."
-            )
         if not self.robinhood_configured:
-            raise SyncError("Robinhood sync is not configured.")
+            raise SyncError(
+                "Robinhood sync is not linked. Run "
+                "`python scripts/robinhood_link.py --github` locally."
+            )
 
     @property
     def secrets(self) -> tuple[str, ...]:
@@ -134,9 +124,7 @@ class Settings:
                 self.plaid_client_id,
                 self.plaid_secret,
                 self.plaid_access_token,
-                self.robinhood_username,
-                self.robinhood_password,
-                self.robinhood_totp_secret,
+                self.robinhood_session_b64,
             )
             if value
         )
@@ -636,26 +624,41 @@ def sync_plaid(
     }
 
 
-@contextmanager
-def robinhood_login_deadline(seconds: int = 150) -> Iterator[None]:
-    """Interrupt Robinhood's interactive challenge loops on unattended runners."""
-    if not hasattr(signal, "SIGALRM"):
-        yield
-        return
-
-    def raise_timeout(_signum: int, _frame: Any) -> None:
-        raise SyncError(
-            "Robinhood needs interactive device verification. Approve the "
-            "login in Robinhood, then manually rerun the workflow."
-        )
-
-    previous_handler = signal.signal(signal.SIGALRM, raise_timeout)
-    signal.alarm(seconds)
+def decode_robinhood_session(encoded: str) -> dict[str, str]:
+    """Decode the trusted session exported by the local linking helper."""
     try:
-        yield
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        raw = base64.b64decode(encoded, validate=True)
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SyncError(
+            "ROBINHOOD_SESSION_B64 is invalid. Re-run "
+            "`python scripts/robinhood_link.py --github` locally."
+        ) from error
+
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise SyncError("The Robinhood session has an unsupported format.")
+    if any(
+        not isinstance(payload.get(field), str) or not payload[field]
+        for field in ROBINHOOD_SESSION_FIELDS
+    ):
+        raise SyncError("The Robinhood session is missing required credentials.")
+    return {field: payload[field] for field in ROBINHOOD_SESSION_FIELDS}
+
+
+def activate_robinhood_session(encoded: str) -> None:
+    """Install a cached bearer token without starting an interactive login."""
+    session = decode_robinhood_session(encoded)
+    robinhood_auth.update_session(
+        "Authorization",
+        f"{session['token_type']} {session['access_token']}",
+    )
+    robinhood_auth.set_login_state(True)
+
+
+def clear_robinhood_session() -> None:
+    """Clear process memory without revoking the reusable server session."""
+    robinhood_auth.set_login_state(False)
+    robinhood_auth.update_session("Authorization", None)
 
 
 def robinhood_stock_rows(
@@ -757,22 +760,17 @@ def sync_robinhood(
     settings: Settings, store: SyncStore
 ) -> tuple[dict[str, int], dict[str, Any]]:
     settings.validate_robinhood()
-    mfa_code = pyotp.TOTP(settings.robinhood_totp_secret).now()
     synced_at = iso_now()
     try:
-        with robinhood_login_deadline():
-            # No pickle means an Actions runner never writes reusable credentials.
-            robinhood.login(
-                settings.robinhood_username,
-                settings.robinhood_password,
-                mfa_code=mfa_code,
-                store_session=False,
-            )
+        # Interactive SMS/app approval happens only in robinhood_link.py.
+        activate_robinhood_session(settings.robinhood_session_b64)
         account_profile = robinhood.load_account_profile()
         portfolio = robinhood.load_portfolio_profile()
         if not account_profile or not portfolio:
             raise SyncError(
-                "Robinhood login failed or returned no account profile."
+                "The Robinhood session expired or was revoked. Re-run "
+                "`python scripts/robinhood_link.py --github` locally and "
+                "approve the new login."
             )
 
         stock_holdings = robinhood.build_holdings() or {}
@@ -792,7 +790,7 @@ def sync_robinhood(
         account_number = str(
             account_profile.get("account_number")
             or account_profile.get("rhs_account_number")
-            or settings.robinhood_username
+            or "unknown"
         )
         external_hash = hashlib.sha256(account_number.encode()).hexdigest()[:24]
         stock_equity = max(
@@ -883,10 +881,8 @@ def sync_robinhood(
         }
         return counts, {"institution": "Robinhood"}
     finally:
-        try:
-            robinhood.logout()
-        except Exception:
-            LOGGER.debug("Robinhood logout did not complete.")
+        # logout() would revoke the token needed by tomorrow's Actions runner.
+        clear_robinhood_session()
 
 
 def run_source(
@@ -970,12 +966,7 @@ def main() -> int:
     selected: list[str]
     if args.source == "all":
         selected = ["plaid"]
-        robinhood_values = (
-            settings.robinhood_username,
-            settings.robinhood_password,
-            settings.robinhood_totp_secret,
-        )
-        if any(robinhood_values):
+        if settings.robinhood_configured:
             selected.append("robinhood")
     else:
         selected = [args.source]

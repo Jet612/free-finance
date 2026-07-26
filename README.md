@@ -240,39 +240,46 @@ Robinhood integration, and login behavior can change without notice. This projec
 will call portfolio and holdings endpoints only; it will not include buy, sell,
 transfer, or cancel-order operations.
 
-1. Enable two-factor authentication on the Robinhood account.
-2. Choose an authenticator-app/TOTP method. If Robinhood offers an **Other**
-   authenticator option, save the alphanumeric TOTP seed in a password manager
-   before finishing setup.
-3. Add the following only to `.env.local` and GitHub Actions secrets:
+1. Add the account credentials to `.env.local`. They are needed only on your
+   computer for this one-time linking step:
 
    ```dotenv
    ROBINHOOD_USERNAME=<account-email>
    ROBINHOOD_PASSWORD=<account-password>
-   ROBINHOOD_TOTP_SECRET=<alphanumeric-totp-seed>
    ```
 
-4. Test locally:
+2. Start the local linking helper:
+
+   ```bash
+   python scripts/robinhood_link.py --github
+   ```
+
+3. Approve the new-device prompt in the Robinhood app. If Robinhood selects SMS
+   or email verification instead, enter that one-time code in the terminal.
+4. The helper validates the account, saves `ROBINHOOD_SESSION_B64` to
+   `.env.local`, and sends that value to GitHub Actions over standard input. It
+   does **not** send the username or password to GitHub.
+5. Confirm that the session can read the account:
 
    ```bash
    python scripts/sync.py --source robinhood --dry-run
    ```
 
-The TOTP seed can generate valid MFA codes and is as sensitive as the password.
-Do not store a one-time six-digit MFA code; it expires too quickly for scheduled
-jobs. The `robin_stocks`
-[TOTP setup guide](https://robin-stocks.readthedocs.io/en/latest/quickstart.html#with-mfa-entered-programmatically-from-time-based-one-time-password-totp)
-shows how the seed is used.
-
 > [!WARNING]
-> Robinhood may require a phone approval, CAPTCHA, password reset, or new-device
-> verification even when TOTP is configured. If that happens, the daily job
-> cannot solve the challenge. Step 3 will preserve successful Plaid work, avoid
-> partial Robinhood writes, report the source failure clearly, and exit
-> unsuccessfully so GitHub can notify you.
+> `ROBINHOOD_SESSION_B64` contains a bearer session. Base64 is transport encoding,
+> not encryption, so protect this value like a password. The helper requests a
+> 30-day session, but Robinhood can revoke or expire it earlier. When that
+> happens, rerun the helper locally and approve a new login. The daily job never
+> starts an interactive login and will not repeatedly send phone challenges.
 
-Robinhood is optional. Leave all three `ROBINHOOD_*` values empty to skip that
-source.
+The session approach follows the persistence mechanism implemented by
+`robin_stocks`: a successful interactive login returns access and refresh tokens
+plus a device token, which can be reused until Robinhood invalidates them. See
+the library's [authentication source](https://github.com/jmfernandes/robin_stocks/blob/master/robin_stocks/robinhood/authentication.py)
+and its open
+[verification-workflow issue](https://github.com/jmfernandes/robin_stocks/issues/521).
+
+Robinhood is optional. Leave `ROBINHOOD_SESSION_B64` empty to skip that source.
 
 ## 5. Add GitHub Actions secrets
 
@@ -289,9 +296,7 @@ Create these **repository secrets**:
 | `PLAID_CLIENT_ID` | Yes | Plaid Dashboard |
 | `PLAID_SECRET` | Yes | Plaid Sandbox or Production secret |
 | `PLAID_ACCESS_TOKEN` | Yes | Local Plaid linking helper |
-| `ROBINHOOD_USERNAME` | No | Robinhood login |
-| `ROBINHOOD_PASSWORD` | No | Robinhood login |
-| `ROBINHOOD_TOTP_SECRET` | No | Robinhood TOTP seed |
+| `ROBINHOOD_SESSION_B64` | No | Local Robinhood linking helper |
 
 Create this **repository variable** under the Variables tab:
 
@@ -312,15 +317,13 @@ gh secret set SUPABASE_SECRET_KEY
 gh secret set PLAID_CLIENT_ID
 gh secret set PLAID_SECRET
 gh secret set PLAID_ACCESS_TOKEN
-gh secret set ROBINHOOD_USERNAME
-gh secret set ROBINHOOD_PASSWORD
-gh secret set ROBINHOOD_TOTP_SECRET
 gh variable set PLAID_ENV
 gh variable set APP_TIMEZONE
 ```
 
-Skip the three Robinhood commands when Robinhood sync is disabled. Verify names,
-not values:
+The Robinhood helper sets its session secret automatically when run with
+`--github`; do not paste the session into a shell command. Verify names, not
+values:
 
 ```bash
 gh secret list
@@ -394,9 +397,9 @@ value belongs.
 | `PLAID_CLIENT_ID` | Yes | Yes | No | Yes | Plaid application identifier |
 | `PLAID_SECRET` | Yes | Yes | No | Yes | Environment-specific Plaid secret |
 | `PLAID_ACCESS_TOKEN` | Yes | Yes | No | Yes | Long-lived Item credential |
-| `ROBINHOOD_USERNAME` | Yes | Optional | No | Optional | Robinhood login |
-| `ROBINHOOD_PASSWORD` | Yes | Optional | No | Optional | Robinhood login |
-| `ROBINHOOD_TOTP_SECRET` | Yes | Optional | No | Optional | Generates unattended MFA codes |
+| `ROBINHOOD_USERNAME` | Yes | Link only | No | No | One-time local Robinhood login |
+| `ROBINHOOD_PASSWORD` | Yes | Link only | No | No | One-time local Robinhood login |
+| `ROBINHOOD_SESSION_B64` | Yes | Optional | No | Optional | Reusable read-only sync session |
 | `LOG_LEVEL` | No | Yes | No | Workflow default | Python log verbosity |
 
 No variable currently needs a `NEXT_PUBLIC_` prefix.
@@ -423,6 +426,7 @@ python -m pip install -r scripts/requirements.txt
 # Link a Plaid Item and test each source without writes
 python scripts/plaid_link.py --github
 python scripts/sync.py --source plaid --dry-run
+python scripts/robinhood_link.py --github
 python scripts/sync.py --source robinhood --dry-run
 
 # Run the real sync
@@ -485,11 +489,12 @@ Confirm that `DATABASE_URL` is the transaction-pooler URI on port `6543`, not th
 IPv6-only direct connection. If the password contains reserved URL characters,
 copy the generated URI from Supabase's Connect dialog or URL-encode the password.
 
-### Robinhood sync asks for interactive input
+### Robinhood reports that its session expired
 
-Stop the run rather than repeatedly attempting login. Confirm all three
-`ROBINHOOD_*` secrets, approve any Robinhood phone challenge, then run the
-workflow manually. Repeated automated attempts can trigger account lockouts.
+Run `python scripts/robinhood_link.py --github` on your computer, approve the
+new Robinhood app notification or enter the SMS code, then manually rerun the
+workflow. Do not attempt to paste a one-time SMS code into GitHub secrets; the
+linking helper converts the approved login into the reusable session.
 
 ### The scheduled Action did not run
 
@@ -509,6 +514,7 @@ which is another reason this financial repository should be private.
 ├── drizzle/                    # Versioned PostgreSQL migrations
 ├── scripts/
 │   ├── plaid_link.py           # One-time local Plaid bootstrap
+│   ├── robinhood_link.py       # One-time SMS/app approval bootstrap
 │   ├── sync.py                 # Idempotent daily sync
 │   ├── test_sync.py            # Provider normalization unit tests
 │   └── requirements.txt
