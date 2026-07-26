@@ -460,6 +460,12 @@ Confirm that `PLAID_ENV=production`, the secret is the Production secret, and
 Trial approval is complete. Plaid notes that OAuth availability may take 6–24
 hours after approval.
 
+### Plaid reports `INVALID_API_KEYS`
+
+Plaid secrets are environment-specific. If `PLAID_ENV=production`, use the
+Production secret shown after Trial approval; a Sandbox secret will be rejected.
+For disposable test data, pair the Sandbox secret with `PLAID_ENV=sandbox`.
+
 ### Plaid reports `ITEM_LOGIN_REQUIRED`
 
 The bank connection needs user attention. Re-run the linking helper in update
