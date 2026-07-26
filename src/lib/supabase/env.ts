@@ -1,3 +1,30 @@
+export function parseSupabasePublicUrl(value: string | undefined) {
+  if (!value) return null;
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(value);
+  } catch {
+    return null;
+  }
+
+  const loopback =
+    parsedUrl.hostname === "localhost" ||
+    parsedUrl.hostname === "127.0.0.1" ||
+    parsedUrl.hostname === "[::1]";
+  const secureProtocol =
+    parsedUrl.protocol === "https:" ||
+    (loopback && parsedUrl.protocol === "http:");
+  if (
+    !secureProtocol ||
+    parsedUrl.username ||
+    parsedUrl.password
+  ) {
+    return null;
+  }
+  return parsedUrl.origin;
+}
+
 export function getSupabasePublicEnv() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const publishableKey =
@@ -9,19 +36,12 @@ export function getSupabasePublicEnv() {
     );
   }
 
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(url);
-  } catch {
-    throw new Error("NEXT_PUBLIC_SUPABASE_URL must be a valid HTTPS URL.");
-  }
-  if (
-    parsedUrl.protocol !== "https:" ||
-    parsedUrl.username ||
-    parsedUrl.password
-  ) {
-    throw new Error("NEXT_PUBLIC_SUPABASE_URL must be a credential-free HTTPS URL.");
+  const parsedUrl = parseSupabasePublicUrl(url);
+  if (!parsedUrl) {
+    throw new Error(
+      "NEXT_PUBLIC_SUPABASE_URL must be credential-free HTTPS (or loopback HTTP).",
+    );
   }
 
-  return { url: parsedUrl.origin, publishableKey };
+  return { url: parsedUrl, publishableKey };
 }
