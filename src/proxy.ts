@@ -10,7 +10,7 @@ function contentSecurityPolicy(nonce: string, supabaseOrigin: string) {
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ""}`,
     // Recharts and React use style attributes; scripts still use a strict nonce.
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    "img-src 'self' data: blob: https://plaid-merchant-logos.plaid.com",
     "font-src 'self' data:",
     `connect-src 'self' ${supabaseOrigin}`,
     "object-src 'none'",

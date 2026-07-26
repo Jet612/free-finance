@@ -41,7 +41,9 @@ deeper tools only when they are needed:
 
 - **Accounts** — balances, availability, connection health, and last sync time.
 - **Transactions** — searchable and filterable history with account, category,
-  pending status, and provider-supplied transaction time.
+  pending status, and provider-supplied transaction time. Select any row for
+  its merchant logo and website, authorization/posting details, account,
+  location, classification, and Plaid reference.
 - **Subscriptions** — estimated recurring charges detected privately from
   merchant, amount consistency, and payment cadence.
 - **Budgets** — editable monthly category limits compared with actual spending.
