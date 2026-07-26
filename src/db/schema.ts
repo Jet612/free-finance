@@ -178,6 +178,64 @@ export const budgets = pgTable(
   ],
 );
 
+export const subscriptionRules = pgTable(
+  "subscription_rules",
+  {
+    id: bigint({ mode: "number" })
+      .primaryKey()
+      .generatedAlwaysAsIdentity(),
+    // The detector's normalized merchant + detailed category fingerprint.
+    streamKey: text("stream_key").notNull(),
+    ruleType: text("rule_type").notNull(),
+    merchantName: text("merchant_name").notNull(),
+    categoryPrimary: text("category_primary"),
+    categoryDetailed: text("category_detailed"),
+    cadence: text(),
+    amount: numeric({ precision: 19, scale: 4 }),
+    lastChargedAt: timestamp("last_charged_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    sourceTransactionId: bigint("source_transaction_id", {
+      mode: "number",
+    }).references(() => transactions.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("subscription_rules_stream_key_uidx").on(table.streamKey),
+    index("subscription_rules_source_transaction_idx").on(
+      table.sourceTransactionId,
+    ),
+    check(
+      "subscription_rules_valid_type",
+      sql`${table.ruleType} in ('included', 'excluded')`,
+    ),
+    check(
+      "subscription_rules_valid_inclusion",
+      sql`(
+        (
+          ${table.ruleType} = 'excluded'
+          and ${table.cadence} is null
+          and ${table.amount} is null
+          and ${table.lastChargedAt} is null
+        )
+        or
+        (
+          ${table.ruleType} = 'included'
+          and ${table.cadence} in ('weekly', 'biweekly', 'monthly', 'quarterly', 'annual')
+          and ${table.amount} > 0
+          and ${table.lastChargedAt} is not null
+        )
+      )`,
+    ),
+  ],
+);
+
 export const holdings = pgTable(
   "holdings",
   {
@@ -273,4 +331,5 @@ export type Account = typeof accounts.$inferSelect;
 export type BalanceSnapshot = typeof balanceSnapshots.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type Budget = typeof budgets.$inferSelect;
+export type SubscriptionRule = typeof subscriptionRules.$inferSelect;
 export type Holding = typeof holdings.$inferSelect;

@@ -5,6 +5,14 @@ import { sql } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import type { AccountRow } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
+import {
+  deriveSubscriptions,
+  manualSubscriptionInsight,
+  subscriptionStreamKey,
+  type SubscriptionCadence,
+  type SubscriptionCandidate,
+  type SubscriptionInsight,
+} from "@/lib/subscription-detection";
 
 type Row = Record<string, unknown>;
 
@@ -234,28 +242,20 @@ export async function getAccountsData(): Promise<AccountsData> {
   };
 }
 
-type SubscriptionCandidate = {
-  merchant: string;
-  category: string | null;
-  amount: number;
-  occurredAt: Date;
-};
-
-export type SubscriptionInsight = {
-  merchant: string;
-  category: string | null;
-  averageAmount: number;
-  monthlyEquivalent: number;
-  annualized: number;
-  cadence: "Weekly" | "Every 2 weeks" | "Monthly" | "Quarterly" | "Annual";
-  occurrences: number;
-  lastChargedAt: string;
-  nextExpectedAt: string;
-  confidence: "Strong match" | "Likely";
-};
-
 export type SubscriptionsData = {
   subscriptions: SubscriptionInsight[];
+  transactionChoices: {
+    id: number;
+    merchant: string;
+    amount: number;
+    occurredAt: string;
+    category: string | null;
+  }[];
+  dismissed: {
+    id: number;
+    merchant: string;
+    category: string | null;
+  }[];
   metrics: {
     monthlyEstimate: number;
     annualEstimate: number;
@@ -264,110 +264,24 @@ export type SubscriptionsData = {
   };
 };
 
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2
-    ? sorted[middle]
-    : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function cadenceFor(days: number): {
-  label: SubscriptionInsight["cadence"];
-  days: number;
-  perYear: number;
-} | null {
-  if (days >= 5 && days <= 9) {
-    return { label: "Weekly", days: 7, perYear: 52 };
-  }
-  if (days >= 12 && days <= 18) {
-    return { label: "Every 2 weeks", days: 14, perYear: 26 };
-  }
-  if (days >= 25 && days <= 38) {
-    return { label: "Monthly", days: 30.4375, perYear: 12 };
-  }
-  if (days >= 75 && days <= 105) {
-    return { label: "Quarterly", days: 91.3125, perYear: 4 };
-  }
-  if (days >= 330 && days <= 400) {
-    return { label: "Annual", days: 365.25, perYear: 1 };
-  }
-  return null;
-}
-
-function normalizedMerchant(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .replace(/\b(?:payment|purchase|online|pos|debit|credit)\b/g, "")
-    .replace(/[0-9#*]+/g, "")
-    .replace(/[^a-z]+/g, " ")
-    .trim();
-}
-
-function deriveSubscriptions(
-  candidates: SubscriptionCandidate[],
-): SubscriptionInsight[] {
-  const groups = new Map<string, SubscriptionCandidate[]>();
-  for (const candidate of candidates) {
-    const key = normalizedMerchant(candidate.merchant);
-    if (!key) continue;
-    groups.set(key, [...(groups.get(key) ?? []), candidate]);
-  }
-
-  const subscriptions: SubscriptionInsight[] = [];
-  for (const entries of groups.values()) {
-    const ordered = [...entries].sort(
-      (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
-    );
-    if (ordered.length < 2) continue;
-
-    const intervals = ordered.slice(1).map((entry, index) =>
-      (entry.occurredAt.getTime() - ordered[index].occurredAt.getTime()) /
-        86_400_000,
-    );
-    const cadence = cadenceFor(median(intervals));
-    if (!cadence) continue;
-
-    const amounts = ordered.map((entry) => entry.amount);
-    const averageAmount =
-      amounts.reduce((total, amount) => total + amount, 0) / amounts.length;
-    const spread =
-      (Math.max(...amounts) - Math.min(...amounts)) /
-      Math.max(averageAmount, 1);
-    if (spread > 0.35) continue;
-
-    const last = ordered.at(-1)!;
-    const next = new Date(
-      last.occurredAt.getTime() + cadence.days * 86_400_000,
-    );
-    const annualized = averageAmount * cadence.perYear;
-    subscriptions.push({
-      merchant: last.merchant,
-      category: last.category,
-      averageAmount,
-      monthlyEquivalent: annualized / 12,
-      annualized,
-      cadence: cadence.label,
-      occurrences: ordered.length,
-      lastChargedAt: last.occurredAt.toISOString(),
-      nextExpectedAt: next.toISOString(),
-      confidence:
-        ordered.length >= 3 && spread <= 0.15 ? "Strong match" : "Likely",
-    });
-  }
-
-  return subscriptions.sort(
-    (a, b) => b.monthlyEquivalent - a.monthlyEquivalent,
-  );
+function cadenceValue(value: unknown): SubscriptionCadence | null {
+  return ["weekly", "biweekly", "monthly", "quarterly", "annual"].includes(
+    String(value),
+  )
+    ? (String(value) as SubscriptionCadence)
+    : null;
 }
 
 export async function getSubscriptionsData(): Promise<SubscriptionsData> {
   await requireSession();
   const db = getDb();
-  const result = await db.execute(sql`
+  const candidateRows = await db.execute(sql`
     select
       coalesce(merchant_name, name) as merchant,
+      name as description,
       category_primary as category,
+      category_detailed,
+      raw_data->>'transaction_code' as transaction_code,
       abs(amount)::float8 as amount,
       coalesce(
         transaction_at,
@@ -385,15 +299,129 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
       )
     order by occurred_at
   `);
+  const ruleRows = await db.execute(sql`
+    select
+      id,
+      stream_key,
+      rule_type,
+      merchant_name,
+      category_primary,
+      cadence,
+      amount::float8 as amount,
+      last_charged_at
+    from public.subscription_rules
+    order by updated_at desc
+  `);
+  const transactionRows = await db.execute(sql`
+    select
+      id,
+      coalesce(merchant_name, name) as merchant,
+      name as description,
+      category_primary as category,
+      category_detailed,
+      abs(amount)::float8 as amount,
+      coalesce(
+        transaction_at,
+        transaction_date::timestamp at time zone ${process.env.APP_TIMEZONE ?? "America/New_York"}
+      )::text as occurred_at
+    from public.transactions
+    where amount < 0
+      and pending = false
+      and transaction_date >= current_date - interval '365 days'
+      and coalesce(category_primary, '') not in (
+        'TRANSFER_IN',
+        'TRANSFER_OUT',
+        'INCOME',
+        'LOAN_PAYMENTS'
+      )
+    order by occurred_at desc
+    limit 200
+  `);
 
-  const subscriptions = deriveSubscriptions(
-    (result as Row[]).map((item) => ({
+  const candidates = (candidateRows as Row[]).map((item) => ({
+    merchant: stringValue(item.merchant),
+    description: stringValue(item.description),
+    category: item.category ? stringValue(item.category) : null,
+    categoryDetailed: item.category_detailed
+      ? stringValue(item.category_detailed)
+      : null,
+    transactionCode: item.transaction_code
+      ? stringValue(item.transaction_code)
+      : null,
+    amount: numberValue(item.amount),
+    occurredAt: new Date(stringValue(item.occurred_at)),
+  }));
+  const ruleKeys = new Set(
+    (ruleRows as Row[]).map((item) => stringValue(item.stream_key)),
+  );
+  const automatic = deriveSubscriptions(candidates).filter(
+    (item) => !ruleKeys.has(item.streamKey),
+  );
+  const manual = (ruleRows as Row[]).flatMap((item) => {
+    const cadence = cadenceValue(item.cadence);
+    const lastChargedAt = new Date(stringValue(item.last_charged_at));
+    if (
+      stringValue(item.rule_type) !== "included" ||
+      !cadence ||
+      !Number.isFinite(lastChargedAt.getTime())
+    ) {
+      return [];
+    }
+    return [
+      manualSubscriptionInsight({
+        ruleId: numberValue(item.id),
+        streamKey: stringValue(item.stream_key),
+        merchant: stringValue(item.merchant_name),
+        category: item.category_primary
+          ? stringValue(item.category_primary)
+          : null,
+        cadence,
+        amount: numberValue(item.amount),
+        lastChargedAt,
+      }),
+    ];
+  });
+  const subscriptions = [...automatic, ...manual].sort(
+    (a, b) => b.monthlyEquivalent - a.monthlyEquivalent,
+  );
+  const dismissed = (ruleRows as Row[])
+    .filter((item) => stringValue(item.rule_type) === "excluded")
+    .map((item) => ({
+      id: numberValue(item.id),
+      merchant: stringValue(item.merchant_name),
+      category: item.category_primary
+        ? stringValue(item.category_primary)
+        : null,
+    }));
+
+  const seenTransactionStreams = new Set<string>();
+  const transactionChoices = (transactionRows as Row[]).flatMap((item) => {
+    const candidate: SubscriptionCandidate = {
       merchant: stringValue(item.merchant),
+      description: stringValue(item.description),
       category: item.category ? stringValue(item.category) : null,
+      categoryDetailed: item.category_detailed
+        ? stringValue(item.category_detailed)
+        : null,
+      transactionCode: null,
       amount: numberValue(item.amount),
       occurredAt: new Date(stringValue(item.occurred_at)),
-    })),
-  );
+    };
+    const streamKey = subscriptionStreamKey(candidate);
+    if (seenTransactionStreams.has(streamKey) || streamKey.startsWith(":")) {
+      return [];
+    }
+    seenTransactionStreams.add(streamKey);
+    return [
+      {
+        id: numberValue(item.id),
+        merchant: candidate.merchant,
+        amount: candidate.amount,
+        occurredAt: candidate.occurredAt.toISOString(),
+        category: candidate.category,
+      },
+    ];
+  });
   const now = Date.now();
   const next30Days = now + 30 * 86_400_000;
   const monthlyEstimate = subscriptions.reduce(
@@ -403,6 +431,8 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
 
   return {
     subscriptions,
+    transactionChoices,
+    dismissed,
     metrics: {
       monthlyEstimate,
       annualEstimate: subscriptions.reduce(
