@@ -12,17 +12,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar lg:flex lg:flex-col">
-        <div className="flex h-20 items-center border-b px-6">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[232px] border-r bg-sidebar lg:flex lg:flex-col">
+        <div className="flex h-[88px] items-center px-5">
           <Brand name={appName} />
         </div>
-        <div className="flex-1 px-3 py-6">
+        <div className="flex-1 overflow-y-auto px-3 py-3">
           <NavLinks />
         </div>
-        <div className="border-t p-4">
-          <div className="mb-3 flex items-center gap-2 px-2 text-xs text-muted-foreground">
+        <div className="border-t p-3">
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground">
             <LockKeyhole className="size-3.5 text-primary" />
-            Supabase Auth · server-only data
+            Private · server-only data
           </div>
           <form action={logout}>
             <Button
@@ -37,7 +37,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="lg:pl-64">
+      <div className="lg:pl-[232px]">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-background/88 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
           <div className="flex items-center gap-2">
             <MobileNavigation name={appName} />
@@ -46,13 +46,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <span className="mr-2 hidden text-xs text-muted-foreground sm:inline">
+            <span className="mr-2 hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
               Personal instance
             </span>
             <ThemeToggle />
           </div>
         </header>
-        <main className="mx-auto w-full max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8 xl:px-10">
           {children}
         </main>
       </div>

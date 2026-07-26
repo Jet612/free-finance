@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 
 import { getDb } from "@/db/client";
 import { requireSession } from "@/lib/auth";
@@ -14,6 +15,11 @@ export type SyncActionState = {
   message?: string;
   queuedAt?: string;
   runUrl?: string;
+};
+
+export type BudgetActionState = {
+  status: "idle" | "saved" | "error";
+  message?: string;
 };
 
 const SYNC_REQUEST_COOKIE = "free_finance_sync_requested_at";
@@ -152,4 +158,56 @@ export async function requestSync(
     queuedAt,
     runUrl,
   };
+}
+
+const budgetSchema = z.object({
+  category: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[A-Z0-9_ &-]+$/),
+  monthlyLimit: z.coerce.number().positive().max(100_000_000),
+});
+
+export async function saveBudget(
+  _previousState: BudgetActionState,
+  formData: FormData,
+): Promise<BudgetActionState> {
+  void _previousState;
+  // The form lives behind auth, but Server Actions remain public POST targets.
+  await requireSession();
+  const parsed = budgetSchema.safeParse({
+    category: String(formData.get("category") ?? "")
+      .trim()
+      .toUpperCase(),
+    monthlyLimit: formData.get("monthlyLimit"),
+  });
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Enter a positive monthly amount.",
+    };
+  }
+
+  const db = getDb();
+  await db.execute(sql`
+    insert into public.budgets (
+      category_primary,
+      monthly_limit,
+      updated_at
+    )
+    values (
+      ${parsed.data.category},
+      ${parsed.data.monthlyLimit},
+      now()
+    )
+    on conflict (category_primary) do update
+    set
+      monthly_limit = excluded.monthly_limit,
+      updated_at = now()
+  `);
+  revalidatePath("/budgets");
+  revalidatePath("/");
+  return { status: "saved", message: "Budget saved." };
 }

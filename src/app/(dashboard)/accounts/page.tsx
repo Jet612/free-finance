@@ -1,0 +1,68 @@
+import type { Metadata } from "next";
+import { CircleDollarSign, Landmark, ShieldCheck, WalletCards } from "lucide-react";
+
+import { AccountTable } from "@/components/account-table";
+import { PageHeader } from "@/components/page-header";
+import { SummaryStrip } from "@/components/summary-strip";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { getAccountsData } from "@/lib/detail-data";
+import { formatCurrency } from "@/lib/format";
+
+export const metadata: Metadata = { title: "Accounts" };
+
+export default async function AccountsPage() {
+  const data = await getAccountsData();
+  return (
+    <div className="grid gap-7">
+      <PageHeader
+        eyebrow="Accounts"
+        title="Everything in one ledger"
+        description="Current balances, available cash, connection health, and the source behind each account."
+      />
+      <SummaryStrip
+        items={[
+          {
+            label: "Total assets",
+            value: formatCurrency(data.metrics.assets),
+            icon: WalletCards,
+          },
+          {
+            label: "Liabilities",
+            value: formatCurrency(data.metrics.liabilities),
+            icon: CircleDollarSign,
+            tone: data.metrics.liabilities ? "negative" : "default",
+          },
+          {
+            label: "Available cash",
+            value: formatCurrency(data.metrics.availableCash),
+            icon: Landmark,
+          },
+          {
+            label: "Connected",
+            value: `${data.metrics.connected} accounts`,
+            detail: "Included in current net worth",
+            icon: ShieldCheck,
+          },
+        ]}
+      />
+      <Card className="shadow-none">
+        <CardHeader className="border-b">
+          <CardTitle>Connected accounts</CardTitle>
+          <CardDescription>
+            Balances refresh with each provider sync; history remains one
+            end-of-day snapshot per account.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AccountTable accounts={data.accounts} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

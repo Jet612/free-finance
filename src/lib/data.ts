@@ -23,6 +23,7 @@ export type AccountRow = {
   mask: string | null;
   source: string;
   balance: number;
+  availableBalance?: number | null;
   connected: boolean;
   lastSyncedAt: string | null;
 };
@@ -30,17 +31,20 @@ export type AccountRow = {
 export type RecentTransaction = {
   id: number;
   date: string;
+  transactionAt: string | null;
   name: string;
   merchantName: string | null;
   category: string | null;
   amount: number;
   accountName: string;
+  pending: boolean;
 };
 
 export type DashboardData = {
   metrics: {
     netWorth: number;
     netWorthChange: number | null;
+    netWorthChangePercent: number | null;
     monthlyCashFlow: number;
     monthlyIncome: number;
     monthlySpending: number;
@@ -96,6 +100,7 @@ export async function getDashboardData(): Promise<DashboardData> {
         from public.transactions
         where transaction_date >= ${monthStart}::date
           and pending = false
+          and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
       ),
       investment as (
         select coalesce(sum(current_value), 0)::float8 as investment_value
@@ -104,7 +109,7 @@ export async function getDashboardData(): Promise<DashboardData> {
       trend_rows as (
         select snapshot_date::text as date, sum(balance)::float8 as value
         from public.balance_snapshots
-        where snapshot_date >= current_date - interval '180 days'
+        where snapshot_date >= current_date - interval '365 days'
         group by snapshot_date
       ),
       trend as (
@@ -122,6 +127,7 @@ export async function getDashboardData(): Promise<DashboardData> {
         where transaction_date >= current_date - interval '30 days'
           and amount < 0
           and pending = false
+          and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
         group by coalesce(category_primary, 'Other')
         order by value desc
         limit 7
@@ -161,19 +167,25 @@ export async function getDashboardData(): Promise<DashboardData> {
         select
           t.id,
           t.transaction_date::text as date,
+          t.transaction_at::text as transaction_at,
           t.name,
           t.merchant_name,
           t.category_primary as category,
           t.amount::float8 as amount,
-          a.name as account_name
+          t.pending,
+          a.name as account_name,
+          coalesce(t.transaction_at, t.transaction_date::timestamp at time zone ${process.env.APP_TIMEZONE ?? "America/New_York"}) as sort_at
         from public.transactions t
         join public.accounts a on a.id = t.account_id
-        order by t.transaction_date desc, t.id desc
+        order by sort_at desc, t.id desc
         limit 8
       ),
       transaction_data as (
         select coalesce(
-          jsonb_agg(to_jsonb(transaction_rows) order by date desc, id desc),
+          jsonb_agg(
+            to_jsonb(transaction_rows) - 'sort_at'
+            order by sort_at desc, id desc
+          ),
           '[]'::jsonb
         ) as data
         from transaction_rows
@@ -225,15 +237,23 @@ export async function getDashboardData(): Promise<DashboardData> {
     date: String(row.date),
     value: numberValue(row.value),
   }));
-  const priorValue = trend.length > 1 ? trend.at(-2)?.value : undefined;
-  const latestValue = trend.at(-1)?.value;
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - 90);
+  const cutoffDate = cutoff.toISOString().slice(0, 10);
+  const priorValue =
+    trend.find((point) => point.date >= cutoffDate)?.value ??
+    (trend.length > 1 ? trend.at(0)?.value : undefined);
+  const netWorth = numberValue(dashboard?.net_worth);
+  const netWorthChange =
+    priorValue !== undefined ? netWorth - priorValue : null;
 
   return {
     metrics: {
-      netWorth: numberValue(dashboard?.net_worth),
-      netWorthChange:
-        priorValue !== undefined && latestValue !== undefined
-          ? latestValue - priorValue
+      netWorth,
+      netWorthChange,
+      netWorthChangePercent:
+        netWorthChange !== null && priorValue
+          ? (netWorthChange / Math.abs(priorValue)) * 100
           : null,
       monthlyCashFlow: numberValue(dashboard?.cash_flow),
       monthlyIncome: numberValue(dashboard?.income),
@@ -261,11 +281,13 @@ export async function getDashboardData(): Promise<DashboardData> {
     recentTransactions: (transactionRows as Row[]).map((row) => ({
       id: numberValue(row.id),
       date: String(row.date),
+      transactionAt: row.transaction_at ? String(row.transaction_at) : null,
       name: String(row.name),
       merchantName: row.merchant_name ? String(row.merchant_name) : null,
       category: row.category ? String(row.category) : null,
       amount: numberValue(row.amount),
       accountName: String(row.account_name),
+      pending: Boolean(row.pending),
     })),
     lastSuccessfulSync: dashboard?.last_success?.toString() ?? null,
     completedSyncAt: dashboard?.completed_sync_at?.toString() ?? null,

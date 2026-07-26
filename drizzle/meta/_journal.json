@@ -8,6 +8,13 @@
       "when": 1784950839060,
       "tag": "0000_initial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785037881127,
+      "tag": "0001_skinny_darwin",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,11 @@ import { ArrowDownLeft, ArrowUpRight, ReceiptText } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { RecentTransaction } from "@/lib/data";
-import { formatCurrency, formatDate, titleCase } from "@/lib/format";
+import {
+  formatCurrency,
+  formatTransactionDateTime,
+  titleCase,
+} from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function RecentTransactions({
@@ -29,6 +33,10 @@ export function RecentTransactions({
       {transactions.map((transaction) => {
         const incoming = transaction.amount > 0;
         const Icon = incoming ? ArrowDownLeft : ArrowUpRight;
+        const occurred = formatTransactionDateTime(
+          transaction.transactionAt,
+          transaction.date,
+        );
         return (
           <div
             key={transaction.id}
@@ -49,9 +57,21 @@ export function RecentTransactions({
                 {transaction.merchantName ?? transaction.name}
               </p>
               <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                <span>{formatDate(transaction.date)}</span>
+                <span>{occurred.date}</span>
+                {occurred.time && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>{occurred.time}</span>
+                  </>
+                )}
                 <span aria-hidden="true">·</span>
                 <span className="truncate">{transaction.accountName}</span>
+                {transaction.pending && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>Pending</span>
+                  </>
+                )}
               </div>
             </div>
             <div className="text-right">

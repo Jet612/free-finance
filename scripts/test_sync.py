@@ -43,6 +43,8 @@ class SyncNormalizationTests(TestCase):
                 account_id="account-1",
                 date="2026-01-01",
                 authorized_date=None,
+                datetime=None,
+                authorized_datetime=None,
                 name="Example",
                 merchant_name=None,
                 amount=Decimal(amount),
@@ -61,6 +63,33 @@ class SyncNormalizationTests(TestCase):
 
         self.assertEqual(decimal(spending["amount"]), Decimal("-12.34"))
         self.assertEqual(decimal(income["amount"]), Decimal("100.00"))
+
+    def test_plaid_transaction_prefers_authorized_timestamp(self) -> None:
+        transaction = SimpleNamespace(
+            transaction_id="transaction-timed",
+            account_id="account-1",
+            date="2026-01-01",
+            authorized_date="2025-12-31",
+            datetime="2026-01-01T14:42:00-05:00",
+            authorized_datetime="2025-12-31T11:15:00-05:00",
+            name="Example",
+            merchant_name=None,
+            amount=Decimal("12.34"),
+            personal_finance_category=None,
+            pending=False,
+            payment_channel=None,
+            iso_currency_code="USD",
+            unofficial_currency_code=None,
+            logo_url=None,
+            website=None,
+            to_dict=lambda: {},
+        )
+
+        row = plaid_transaction_row(transaction, 1)
+
+        self.assertEqual(
+            row["transaction_at"], "2025-12-31T11:15:00-05:00"
+        )
 
     def test_hosted_link_finds_nested_public_tokens(self) -> None:
         payload = {

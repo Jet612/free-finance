@@ -503,6 +503,12 @@ def plaid_account_row(
 
 def plaid_transaction_row(transaction: Any, account_id: int) -> dict[str, Any]:
     category = get_value(transaction, "personal_finance_category")
+    # Not every institution returns a timestamp. Plaid recommends the
+    # authorization time for user-facing activity because it is closest to
+    # when the purchase happened; date-only records stay null.
+    transaction_at = get_value(transaction, "authorized_datetime") or get_value(
+        transaction, "datetime"
+    )
     return {
         "account_id": account_id,
         "external_id": transaction.transaction_id,
@@ -512,6 +518,7 @@ def plaid_transaction_row(transaction: Any, account_id: int) -> dict[str, Any]:
             if transaction.authorized_date
             else None
         ),
+        "transaction_at": str(transaction_at) if transaction_at else None,
         "name": transaction.name,
         "merchant_name": transaction.merchant_name,
         # Plaid's positive amount is an outflow; the app uses positive cash-in.
