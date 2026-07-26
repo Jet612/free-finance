@@ -406,7 +406,8 @@ def main() -> int:
             ):
                 return 1
             print(
-                "Next: run `.venv/bin/python scripts/sync.py --source plaid`."
+                "Next: run `.venv/bin/python scripts/sync.py --source plaid`. "
+                "Linked Robinhood data will refresh in the same run."
             )
             return 0
         if args.update and any(

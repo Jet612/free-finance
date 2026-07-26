@@ -592,6 +592,7 @@ python -m pip install -r scripts/requirements.txt
 # Link one or more Plaid Items and test each source without writes
 python scripts/plaid_link.py --github
 # Repeat the previous command to add another institution
+# Plaid refreshes linked Robinhood data in the same run.
 python scripts/sync.py --source plaid --dry-run
 python scripts/robinhood_link.py --github
 python scripts/sync.py --source robinhood --dry-run

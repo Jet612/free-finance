@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: Provider to sync
+        description: Provider to sync (Plaid also syncs linked Robinhood)
         required: true
         default: all
         type: choice
