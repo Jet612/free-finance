@@ -18,6 +18,7 @@ from typing import Any, Iterator
 import plaid
 from dotenv import load_dotenv, set_key
 from plaid.api import plaid_api
+from plaid.exceptions import ApiException
 from plaid.model.country_code import CountryCode
 from plaid.model.item_public_token_exchange_request import (
     ItemPublicTokenExchangeRequest,
@@ -69,6 +70,63 @@ def session_exited(response: Any) -> bool:
         )
     }
     return bool(statuses & {"EXITED", "USER_EXITED", "ERROR"})
+
+
+def plaid_api_error_message(
+    body: str | bytes | None,
+    environment: str,
+    status: int | None = None,
+) -> str:
+    """Turn Plaid's structured errors into safe, actionable CLI output."""
+    if isinstance(body, bytes):
+        body = body.decode(errors="replace")
+    try:
+        payload = json.loads(body or "{}")
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+
+    code = payload.get("error_code")
+    message = payload.get("error_message")
+    request_id = payload.get("request_id")
+    if code == "INVALID_API_KEYS":
+        selected = environment.capitalize()
+        other = "Sandbox" if environment == "production" else "Production"
+        action = (
+            "For real bank data, activate Plaid Trial and copy the Production "
+            "secret into .env.local."
+            if environment == "production"
+            else "Copy the Sandbox secret into .env.local for test data."
+        )
+        return (
+            f"Plaid rejected the API keys for {selected}. The secret may belong "
+            f"to {other}, or access to {selected} is not active.\n"
+            f"{action}\n"
+            "Then verify PLAID_ENV matches that secret and re-run this command."
+        )
+
+    label = (
+        f"Plaid request failed (HTTP {status})"
+        if status
+        else "Plaid request failed"
+    )
+    details = f"{code}: {message}" if code and message else (message or code)
+    if details:
+        label = f"{label}: {details}"
+    if request_id:
+        label = f"{label}\nPlaid request ID: {request_id}"
+    return label
+
+
+def report_plaid_api_error(error: ApiException, environment: str) -> int:
+    print(
+        plaid_api_error_message(
+            getattr(error, "body", None),
+            environment,
+            getattr(error, "status", None),
+        ),
+        file=sys.stderr,
+    )
+    return 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -178,9 +236,12 @@ def main() -> int:
             days_requested=730
         )
 
-    response = api.link_token_create(
-        LinkTokenCreateRequest(**request_values)
-    )
+    try:
+        response = api.link_token_create(
+            LinkTokenCreateRequest(**request_values)
+        )
+    except ApiException as error:
+        return report_plaid_api_error(error, environment)
     hosted_url = response.hosted_link_url
     link_token = response.link_token
     if not hosted_url:
@@ -194,14 +255,20 @@ def main() -> int:
 
     deadline = time.monotonic() + 30 * 60
     while time.monotonic() < deadline:
-        status = api.link_token_get(
-            LinkTokenGetRequest(link_token=link_token)
-        )
+        try:
+            status = api.link_token_get(
+                LinkTokenGetRequest(link_token=link_token)
+            )
+        except ApiException as error:
+            return report_plaid_api_error(error, environment)
         tokens = find_public_tokens(status)
         if tokens:
-            exchange = api.item_public_token_exchange(
-                ItemPublicTokenExchangeRequest(public_token=tokens[0])
-            )
+            try:
+                exchange = api.item_public_token_exchange(
+                    ItemPublicTokenExchangeRequest(public_token=tokens[0])
+                )
+            except ApiException as error:
+                return report_plaid_api_error(error, environment)
             if not ENV_PATH.exists():
                 ENV_PATH.touch(mode=stat.S_IRUSR | stat.S_IWUSR)
             set_key(

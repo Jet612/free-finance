@@ -2,7 +2,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest import TestCase
 
-from scripts.plaid_link import find_public_tokens
+from scripts.plaid_link import find_public_tokens, plaid_api_error_message
 from scripts.sync import decimal, plaid_account_row, plaid_transaction_row
 
 
@@ -71,3 +71,15 @@ class SyncNormalizationTests(TestCase):
         self.assertEqual(
             find_public_tokens(payload), ["public-sandbox-safe-example"]
         )
+
+    def test_plaid_key_error_explains_environment_mismatch(self) -> None:
+        message = plaid_api_error_message(
+            '{"error_code":"INVALID_API_KEYS",'
+            '"error_message":"invalid client_id or secret provided"}',
+            "production",
+            400,
+        )
+
+        self.assertIn("rejected the API keys for Production", message)
+        self.assertIn("secret may belong to Sandbox", message)
+        self.assertIn("activate Plaid Trial", message)
