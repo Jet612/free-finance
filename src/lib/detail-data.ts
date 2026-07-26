@@ -6,6 +6,10 @@ import { getDb } from "@/db/client";
 import type { AccountRow } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
 import {
+  safeMerchantWebsite,
+  safePlaidLogoUrl,
+} from "@/lib/external-url";
+import {
   deriveSubscriptions,
   manualSubscriptionInsight,
   subscriptionStreamKey,
@@ -39,17 +43,33 @@ function monthStartInAppTimezone(): string {
 
 export type TransactionRow = {
   id: number;
+  externalId: string;
   date: string;
+  authorizedDate: string | null;
   transactionAt: string | null;
   name: string;
   merchantName: string | null;
+  originalDescription: string | null;
   category: string | null;
   categoryDetailed: string | null;
   amount: number;
+  currencyCode: string;
+  institutionName: string;
   accountName: string;
+  accountOfficialName: string | null;
   accountMask: string | null;
+  accountType: string;
+  accountSubtype: string | null;
+  accountSource: string;
   pending: boolean;
   paymentChannel: string | null;
+  transactionCode: string | null;
+  checkNumber: string | null;
+  location: string | null;
+  storeNumber: string | null;
+  logoUrl: string | null;
+  website: string | null;
+  updatedAt: string;
 };
 
 export type TransactionsData = {
@@ -74,17 +94,49 @@ export async function getTransactionsData(): Promise<TransactionsData> {
     with transaction_rows as (
       select
         t.id,
+        t.external_id,
         t.transaction_date::text as date,
+        t.authorized_date::text as authorized_date,
         t.transaction_at::text as transaction_at,
         t.name,
         t.merchant_name,
+        t.raw_data->>'original_description' as original_description,
         t.category_primary as category,
         t.category_detailed,
         t.amount::float8 as amount,
+        t.currency_code,
         t.pending,
         t.payment_channel,
+        t.raw_data->>'transaction_code' as transaction_code,
+        t.raw_data->>'check_number' as check_number,
+        nullif(
+          concat_ws(
+            ', ',
+            nullif(t.raw_data#>>'{location,address}', ''),
+            nullif(
+              concat_ws(
+                ' ',
+                nullif(t.raw_data#>>'{location,city}', ''),
+                nullif(t.raw_data#>>'{location,region}', '')
+              ),
+              ''
+            ),
+            nullif(t.raw_data#>>'{location,postal_code}', ''),
+            nullif(t.raw_data#>>'{location,country}', '')
+          ),
+          ''
+        ) as location,
+        t.raw_data#>>'{location,store_number}' as store_number,
+        t.logo_url,
+        t.website,
+        t.updated_at::text as updated_at,
+        a.institution_name,
         a.name as account_name,
+        a.official_name as account_official_name,
         a.mask as account_mask,
+        a.account_type,
+        a.account_subtype,
+        a.source::text as account_source,
         coalesce(
           t.transaction_at,
           t.transaction_date::timestamp at time zone ${timeZone}
@@ -126,23 +178,49 @@ export async function getTransactionsData(): Promise<TransactionsData> {
   const rawTransactions = Array.isArray(row?.data) ? (row.data as Row[]) : [];
   const transactions = rawTransactions.map((item) => ({
     id: numberValue(item.id),
+    externalId: stringValue(item.external_id),
     date: stringValue(item.date),
+    authorizedDate: item.authorized_date
+      ? stringValue(item.authorized_date)
+      : null,
     transactionAt: item.transaction_at
       ? stringValue(item.transaction_at)
       : null,
     name: stringValue(item.name),
     merchantName: item.merchant_name ? stringValue(item.merchant_name) : null,
+    originalDescription: item.original_description
+      ? stringValue(item.original_description)
+      : null,
     category: item.category ? stringValue(item.category) : null,
     categoryDetailed: item.category_detailed
       ? stringValue(item.category_detailed)
       : null,
     amount: numberValue(item.amount),
+    currencyCode: stringValue(item.currency_code),
+    institutionName: stringValue(item.institution_name),
     accountName: stringValue(item.account_name),
+    accountOfficialName: item.account_official_name
+      ? stringValue(item.account_official_name)
+      : null,
     accountMask: item.account_mask ? stringValue(item.account_mask) : null,
+    accountType: stringValue(item.account_type),
+    accountSubtype: item.account_subtype
+      ? stringValue(item.account_subtype)
+      : null,
+    accountSource: stringValue(item.account_source),
     pending: Boolean(item.pending),
     paymentChannel: item.payment_channel
       ? stringValue(item.payment_channel)
       : null,
+    transactionCode: item.transaction_code
+      ? stringValue(item.transaction_code)
+      : null,
+    checkNumber: item.check_number ? stringValue(item.check_number) : null,
+    location: item.location ? stringValue(item.location) : null,
+    storeNumber: item.store_number ? stringValue(item.store_number) : null,
+    logoUrl: safePlaidLogoUrl(item.logo_url),
+    website: safeMerchantWebsite(item.website),
+    updatedAt: stringValue(item.updated_at),
   }));
 
   return {
