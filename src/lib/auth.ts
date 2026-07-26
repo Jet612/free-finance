@@ -19,7 +19,8 @@ export type AuthState = {
 };
 
 function ownerUserId(): string {
-  const userId = process.env.DASHBOARD_USER_ID?.trim();
+  // PostgreSQL returns UUIDs in lowercase; normalize valid environment input.
+  const userId = process.env.DASHBOARD_USER_ID?.trim().toLowerCase();
   if (!userId || !UUID_PATTERN.test(userId)) {
     throw new Error(
       "DASHBOARD_USER_ID must be the UUID of the manually provisioned Supabase user.",

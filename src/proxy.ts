@@ -1,15 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
-function safeOrigin(value: string | undefined) {
-  if (!value) return null;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" ? parsed.origin : null;
-  } catch {
-    return null;
-  }
-}
+import { parseSupabasePublicUrl } from "@/lib/supabase/env";
 
 function contentSecurityPolicy(nonce: string, supabaseOrigin: string) {
   const development = process.env.NODE_ENV === "development";
@@ -36,7 +28,7 @@ function contentSecurityPolicy(nonce: string, supabaseOrigin: string) {
 export async function proxy(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-  const supabaseOrigin = safeOrigin(url) ?? "https://invalid.local";
+  const supabaseOrigin = parseSupabasePublicUrl(url) ?? "https://invalid.local";
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = contentSecurityPolicy(nonce, supabaseOrigin);
   const requestHeaders = new Headers(request.headers);
