@@ -178,7 +178,7 @@ def main() -> int:
         print(str(error), file=sys.stderr)
         return 1
     finally:
-        # Do not call logout(): it revokes the session needed by daily syncs.
+        # Do not call logout(): it revokes the session needed by scheduled syncs.
         robinhood_auth.set_login_state(False)
         robinhood_auth.update_session("Authorization", None)
 

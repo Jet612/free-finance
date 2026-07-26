@@ -192,8 +192,8 @@ export default async function SetupPage() {
                     (source) => source.status === "connected",
                   )
                 }
-                title="Daily automation"
-                detail="A successful sync confirms GitHub secrets and schedule."
+                title="Three-hour automation"
+                detail="Scheduled and manual runs share one non-overlapping workflow."
               />
             </div>
           </CardContent>

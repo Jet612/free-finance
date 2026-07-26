@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CalendarDays, Landmark, TrendingUp, WalletCards } from "lucide-react";
+import { Landmark, TrendingUp, WalletCards } from "lucide-react";
 
 import { AccountTable } from "@/components/account-table";
 import {
@@ -8,6 +8,7 @@ import {
 } from "@/components/finance-charts";
 import { MetricCard } from "@/components/metric-card";
 import { RecentTransactions } from "@/components/recent-transactions";
+import { SyncNowButton } from "@/components/sync-now-button";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -51,10 +52,14 @@ export default async function DashboardPage() {
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">{today}</p>
         </div>
-        <div className="flex items-center gap-2 self-start rounded-lg border bg-card px-3 py-2 text-xs text-muted-foreground sm:self-auto">
-          <CalendarDays className="size-3.5 text-primary" />
-          Daily snapshots
-        </div>
+        <SyncNowButton
+          configured={Boolean(
+            process.env.GITHUB_SYNC_TOKEN &&
+              process.env.GITHUB_SYNC_REPOSITORY,
+          )}
+          completedSyncAt={data.completedSyncAt}
+          failedSyncAt={data.failedSyncAt}
+        />
       </header>
 
       <section className="grid gap-4 md:grid-cols-3">
