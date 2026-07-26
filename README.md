@@ -37,7 +37,7 @@ The dashboard is intentionally empty until a provider completes its first sync.
 flowchart LR
     User["Single dashboard user"] -->|"HTTPS + password session"| Vercel["Next.js on Vercel"]
     Vercel -->|"Pooled, server-only PostgreSQL"| Supabase["Supabase PostgreSQL"]
-    Actions["Daily GitHub Action"] --> Sync["Python sync engine"]
+    Actions["Scheduled GitHub Action"] --> Sync["Python sync engine"]
     Sync -->|"Transactions + balances"| Plaid["Plaid Trial"]
     Sync -->|"Read-only portfolio calls"| Robinhood["Robinhood via robin_stocks"]
     Sync -->|"Server-only Data API upserts"| Supabase
@@ -45,8 +45,9 @@ flowchart LR
 
 The boundaries are intentional:
 
-- Vercel receives only the database runtime URL and dashboard authentication
-  secrets. It does not need bank or brokerage credentials.
+- Vercel receives the database runtime URL, dashboard authentication secrets,
+  and an optional repository-scoped token for the **Sync now** button. It does
+  not receive bank or brokerage credentials.
 - GitHub Actions receives the Plaid, Robinhood, and Supabase sync secrets.
 - Browser code receives no financial-provider or database secrets.
 - Drizzle uses Supabase's transaction pooler for short-lived Vercel functions.
@@ -65,7 +66,7 @@ The boundaries are intentional:
 | Database | Supabase PostgreSQL | Managed PostgreSQL with a practical free tier |
 | ORM | Drizzle ORM | Small SQL-first runtime and straightforward migrations |
 | Sync | Python 3.12+ | First-class Plaid and `robin_stocks` libraries |
-| Scheduler | GitHub Actions | A daily job uses very little Actions time |
+| Scheduler | GitHub Actions | Eight short syncs per day stay inexpensive |
 | Hosting | Vercel | Zero-configuration Next.js deployments |
 
 ## Prerequisites
@@ -158,7 +159,7 @@ pnpm db:migrate
 ```
 
 Run migrations locally with `DATABASE_MIGRATION_URL`; do not run migrations in
-every Vercel build or every daily sync.
+every Vercel build or scheduled sync.
 
 ## 3. Set up Plaid Trial and connect Bank of America
 
@@ -269,7 +270,7 @@ transfer, or cancel-order operations.
 > `ROBINHOOD_SESSION_B64` contains a bearer session. Base64 is transport encoding,
 > not encryption, so protect this value like a password. The helper requests a
 > 30-day session, but Robinhood can revoke or expire it earlier. When that
-> happens, rerun the helper locally and approve a new login. The daily job never
+> happens, rerun the helper locally and approve a new login. The scheduled job never
 > starts an interactive login and will not repeatedly send phone challenges.
 
 The session approach follows the persistence mechanism implemented by
@@ -331,16 +332,39 @@ gh variable list
 ```
 
 1. Push it to the repository's default branch.
-2. Open **Actions → Daily finance sync → Run workflow**.
+2. Open **Actions → Finance sync → Run workflow**.
 3. Start with `PLAID_ENV=sandbox`.
 4. Confirm the run summary and inspect Supabase table rows.
 5. Switch `PLAID_ENV` to `production` only after Sandbox succeeds.
 
-The workflow will run once daily at an off-peak minute and will also support
-manual runs. Scheduled workflows run from the default branch and can be delayed
-under GitHub load; they are appropriate for a daily dashboard, not exact-time
-processing. See the current
+The workflow runs at minute 17 every three hours and also supports manual runs.
+Scheduled workflows run from the default branch and can be delayed under GitHub
+load; they are appropriate for a dashboard, not exact-time processing. See the
+current
 [GitHub schedule syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onschedule).
+
+### Sync frequency and provider limits
+
+Every three hours means eight runs per day. Each normal run makes one Plaid
+real-time balance request and then incrementally consumes available transaction
+changes. Plaid currently documents these Production per-Item limits:
+
+- `/accounts/balance/get`: 5 requests per minute and 30 per hour.
+- `/transactions/sync`: 50 requests per minute.
+
+The application is far below those limits, including occasional manual runs.
+Plaid normally checks institutions for new transactions one to four times per
+day, so a three-hour sync gives current balances but may not reveal a newly
+pending transaction before Plaid has ingested it. This project does not call the
+optional `/transactions/refresh` add-on. See Plaid's
+[rate-limit table](https://plaid.com/docs/errors/rate-limit-exceeded/) and
+[Transactions update guide](https://plaid.com/docs/transactions/webhooks/).
+
+Robinhood does not publish a supported API or rate-limit contract for the
+private endpoints used by `robin_stocks`. The dashboard therefore applies a
+10-minute cooldown to manual requests, and GitHub Actions prevents overlapping
+runs. Eight reads per day is deliberately conservative, but Robinhood can still
+change or revoke access without notice.
 
 ## 6. Deploy to Vercel in under five minutes
 
@@ -360,6 +384,8 @@ GitHub. Plaid and Robinhood credentials do **not** go to Vercel.
    | `DATABASE_URL` | Production |
    | `DASHBOARD_PASSWORD` | Production |
    | `SESSION_SECRET` | Production |
+   | `GITHUB_SYNC_REPOSITORY` | Production |
+   | `GITHUB_SYNC_TOKEN` | Production |
 
 5. Click **Deploy**.
 6. Open the generated `vercel.app` URL and sign in with
@@ -367,13 +393,26 @@ GitHub. Plaid and Robinhood credentials do **not** go to Vercel.
 7. Check `/setup` to confirm that the database is reachable and to see the last
    successful Plaid and Robinhood sync timestamps.
 
+The final two variables enable the dashboard's **Sync now** button:
+
+1. Create a fine-grained GitHub personal access token limited to this one
+   repository.
+2. Grant only **Actions: Read and write**; GitHub adds read-only metadata access.
+3. Set `GITHUB_SYNC_REPOSITORY` to `owner/repository`.
+4. Store the token as the sensitive Production-only `GITHUB_SYNC_TOKEN`.
+
+GitHub's workflow-dispatch endpoint requires Actions write permission; the token
+stays inside the Vercel Server Action and is never serialized to the browser.
+See GitHub's
+[workflow dispatch documentation](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
+
 Vercel supports zero-configuration Next.js deployment and automatically deploys
 future pushes to the production branch. See
 [Vercel's Next.js guide](https://vercel.com/docs/frameworks/full-stack/nextjs)
 and [Git deployment guide](https://vercel.com/docs/git).
 
 For this personal dashboard, keep production data out of Preview deployments by
-leaving the five variables scoped to **Production** only. If a Preview needs real
+leaving these variables scoped to **Production** only. If a Preview needs real
 data, opt in deliberately and remember that environment-variable changes apply
 only to new deployments. Vercel documents environment scoping in its
 [environment-variable guide](https://vercel.com/docs/environment-variables).
@@ -391,6 +430,8 @@ value belongs.
 | `DATABASE_MIGRATION_URL` | Yes | Yes | No | No | Local migration session-pooler URI |
 | `DASHBOARD_PASSWORD` | Yes | Yes | Yes | No | Single-user dashboard login |
 | `SESSION_SECRET` | Yes | Yes | Yes | No | Signs the dashboard session cookie |
+| `GITHUB_SYNC_TOKEN` | Yes | Optional | Optional | No | Dispatches manual syncs server-side |
+| `GITHUB_SYNC_REPOSITORY` | No | Optional | Optional | No | GitHub `owner/repository` target |
 | `SUPABASE_URL` | Treat as config | Yes | No | Yes | Supabase Data API base URL |
 | `SUPABASE_SECRET_KEY` | Yes | Yes | No | Yes | Server-only sync writes |
 | `PLAID_ENV` | No | Yes | No | Variable | `sandbox` or `production` |
@@ -515,10 +556,10 @@ which is another reason this financial repository should be private.
 ├── scripts/
 │   ├── plaid_link.py           # One-time local Plaid bootstrap
 │   ├── robinhood_link.py       # One-time SMS/app approval bootstrap
-│   ├── sync.py                 # Idempotent daily sync
+│   ├── sync.py                 # Idempotent scheduled sync
 │   ├── test_sync.py            # Provider normalization unit tests
 │   └── requirements.txt
-├── .github/workflows/sync.yml  # Daily and manual GitHub Action
+├── .github/workflows/sync.yml  # Three-hour and manual GitHub Action
 ├── .env.example
 └── README.md
 ```

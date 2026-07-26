@@ -51,6 +51,8 @@ export type DashboardData = {
   accounts: AccountRow[];
   recentTransactions: RecentTransaction[];
   lastSuccessfulSync: string | null;
+  completedSyncAt: string | null;
+  failedSyncAt: string | null;
 };
 
 type Row = Record<string, unknown>;
@@ -177,7 +179,18 @@ export async function getDashboardData(): Promise<DashboardData> {
         from transaction_rows
       ),
       sync_data as (
-        select max(last_success_at)::text as last_success
+        select
+          max(last_success_at)::text as last_success,
+          min(last_success_at) filter (
+            where source in (
+              select distinct source::text
+              from public.accounts
+              where connected = true
+            )
+          )::text as completed_sync_at,
+          max(last_attempt_at) filter (
+            where status = 'failed'
+          )::text as failed_sync_at
         from public.sync_states
       )
     select
@@ -190,7 +203,9 @@ export async function getDashboardData(): Promise<DashboardData> {
       spending.data as spending_by_category,
       account_data.data as accounts,
       transaction_data.data as recent_transactions,
-      sync_data.last_success
+      sync_data.last_success,
+      sync_data.completed_sync_at,
+      sync_data.failed_sync_at
     from metric, cash_flow, investment, trend, spending, account_data,
       transaction_data, sync_data
   `);
@@ -253,6 +268,8 @@ export async function getDashboardData(): Promise<DashboardData> {
       accountName: String(row.account_name),
     })),
     lastSuccessfulSync: dashboard?.last_success?.toString() ?? null,
+    completedSyncAt: dashboard?.completed_sync_at?.toString() ?? null,
+    failedSyncAt: dashboard?.failed_sync_at?.toString() ?? null,
   };
 }
 
