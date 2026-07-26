@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { ChartPie, CircleDollarSign, Layers3, TrendingUp } from "lucide-react";
 
+import {
+  HoldingsValueChart,
+  InvestmentAllocationChart,
+} from "@/components/investment-charts";
 import { PageHeader } from "@/components/page-header";
 import { SummaryStrip } from "@/components/summary-strip";
 import { Badge } from "@/components/ui/badge";
@@ -24,19 +28,10 @@ import {
   formatCurrency,
   formatPercent,
   formatQuantity,
-  titleCase,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Investments" };
-
-const allocationColors = [
-  "bg-primary",
-  "bg-cyan-500",
-  "bg-violet-500",
-  "bg-amber-500",
-  "bg-slate-400",
-];
 
 export default async function InvestmentsPage() {
   const data = await getInvestmentsData();
@@ -75,55 +70,31 @@ export default async function InvestmentsPage() {
         ]}
       />
 
-      <Card className="shadow-none">
-        <CardHeader className="border-b">
-          <CardTitle>Portfolio allocation</CardTitle>
-          <CardDescription>
-            Based on the current value of synced holdings
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {data.allocation.length ? (
-            <>
-              <div className="flex h-3 overflow-hidden rounded-sm bg-muted">
-                {data.allocation.map((item, index) => (
-                  <span
-                    key={item.type}
-                    className={allocationColors[index % allocationColors.length]}
-                    style={{ width: `${item.percent}%` }}
-                    title={`${titleCase(item.type)} ${formatPercent(item.percent)}`}
-                  />
-                ))}
-              </div>
-              <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                {data.allocation.map((item, index) => (
-                  <div key={item.type} className="flex items-start gap-2.5">
-                    <span
-                      className={cn(
-                        "mt-1 size-2.5 rounded-sm",
-                        allocationColors[index % allocationColors.length],
-                      )}
-                    />
-                    <div>
-                      <p className="text-sm font-medium">
-                        {titleCase(item.type)}
-                      </p>
-                      <p className="mt-0.5 font-mono text-xs text-muted-foreground tabular-nums">
-                        {formatCurrency(item.value)} ·{" "}
-                        {formatPercent(item.percent)}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              No holdings synced yet.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Card className="shadow-none">
+          <CardHeader className="border-b">
+            <CardTitle>Portfolio allocation</CardTitle>
+            <CardDescription>
+              Current value grouped by asset type
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <InvestmentAllocationChart data={data.allocation} />
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-none">
+          <CardHeader className="border-b">
+            <CardTitle>Largest positions</CardTitle>
+            <CardDescription>
+              Current market value of your top holdings
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <HoldingsValueChart data={data.holdings} />
+          </CardContent>
+        </Card>
+      </div>
 
       <Card className="py-0 shadow-none">
         <div className="border-b px-4 py-4">
