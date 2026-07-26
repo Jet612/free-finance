@@ -6,7 +6,8 @@ PostgreSQL on Supabase, and a small Python sync job on GitHub Actions.
 
 The first supported data sources are:
 
-- Bank of America through Plaid Transactions and Balance
+- Bank, credit, loan, and other compatible accounts through Plaid Transactions
+  and Balance
 - Robinhood stocks and crypto through the community-maintained `robin_stocks`
   package
 
@@ -239,14 +240,19 @@ on passwordless access. If locked out, the project owner can remove a factor or
 reset the user from the Supabase dashboard. See
 [Supabase's TOTP MFA guide](https://supabase.com/docs/guides/auth/auth-mfa/totp).
 
-## 3. Set up Plaid Trial and connect Bank of America
+## 3. Set up Plaid and connect financial institutions
 
 Plaid's current Trial plan provides free production API access for eligible
 developers in the United States and Canada. It includes Transactions and Balance,
-supports Bank of America OAuth, and allows up to 10 lifetime production Items.
-Removing an Item does not return its slot. Review
+supports most major US and Canadian institutions, and allows up to 10 lifetime
+production Items. Removing an Item does not return its slot. Review
 [Plaid's Trial-plan details](https://support.plaid.com/hc/en-us/articles/39994173227159-What-is-the-Plaid-Trial-plan)
 before creating test production Items.
+
+Free Finance does not hardcode an institution. Plaid Link displays institutions
+that support the required Transactions product in `PLAID_COUNTRY_CODES` and that
+are enabled for your Plaid account. Plaid publishes a searchable
+[institution coverage explorer](https://plaid.com/docs/institutions/).
 
 ### Start in Sandbox
 
@@ -257,16 +263,17 @@ before creating test production Items.
    PLAID_CLIENT_ID=...
    PLAID_SECRET=...
    PLAID_ENV=sandbox
+   PLAID_COUNTRY_CODES=US
    ```
 
 3. Run the Plaid linking helper to create a Sandbox Item and write its
-   access token to `.env.local`.
+   access token to the private `PLAID_ACCESS_TOKENS` array in `.env.local`.
 4. Run a manual sync and confirm that sample accounts and transactions reach
    Supabase before using a real account.
 
 Sandbox Items cannot be moved to Production. They are disposable test data.
 
-### Request Trial and connect Bank of America
+### Request Trial and connect real institutions
 
 1. From the Plaid Dashboard, apply for the **Trial** plan and complete identity
    verification. The optional Plaid CLI command `plaid trial` opens the same
@@ -285,32 +292,46 @@ Sandbox Items cannot be moved to Production. They are disposable test data.
 
    ```dotenv
    PLAID_ENV=production
+   PLAID_COUNTRY_CODES=US
    PLAID_CLIENT_ID=<your-client-id>
    PLAID_SECRET=<your-production-secret>
    ```
 
-5. Run:
+   Trial supports US and Canadian institutions. Use `US`, `CA`, or `US,CA`;
+   country access on other Plaid plans depends on the regions approved for that
+   Plaid account.
+
+5. Connect one institution:
 
    ```bash
    .venv/bin/python scripts/plaid_link.py --github
    ```
 
    The helper will create a Hosted Link session, open it in a browser, let you
-   select Bank of America, exchange the one-time public token on the local
-   machine, save the resulting `PLAID_ACCESS_TOKEN` only to `.env.local`, and
-   securely send it and the matching Plaid keys to GitHub Actions over standard
-   input. Omit `--github` if GitHub CLI is not authenticated yet.
+   select any compatible institution, exchange the one-time public token on the
+   local machine, append the resulting Item credential to
+   `PLAID_ACCESS_TOKENS`, and securely send the full credential array and
+   matching Plaid configuration to GitHub Actions over standard input. Omit
+   `--github` if GitHub CLI is not authenticated yet.
 
-6. Confirm the connection without printing the access token:
+6. Repeat the same helper command for every additional institution. Existing
+   Items are preserved and duplicate tokens are ignored.
+7. Confirm all connections without printing access tokens:
 
    ```bash
-   python scripts/sync.py --source plaid --dry-run
+   .venv/bin/python scripts/sync.py --source plaid --dry-run
    ```
 
+Existing forks that already have `PLAID_ACCESS_TOKEN` can migrate without
+reconnecting the institution:
+
+```bash
+.venv/bin/python scripts/plaid_link.py --migrate --github
+```
+
 Plaid access tokens are long-lived credentials and must remain server-side. Plaid
-documents the supported variables and environment names in its
-[CLI guide](https://plaid.com/docs/resources/cli/) and the token exchange in its
-[Link API guide](https://plaid.com/docs/api/link/).
+documents how requested products and countries determine which institutions
+appear in its [Link API guide](https://plaid.com/docs/api/link/).
 
 ## 4. Configure Robinhood read-only sync
 
@@ -375,14 +396,15 @@ Create these **repository secrets**:
 | `SUPABASE_SECRET_KEY` | Yes | Supabase server-only secret key |
 | `PLAID_CLIENT_ID` | Yes | Plaid Dashboard |
 | `PLAID_SECRET` | Yes | Plaid Sandbox or Production secret |
-| `PLAID_ACCESS_TOKEN` | Yes | Local Plaid linking helper |
+| `PLAID_ACCESS_TOKENS` | Yes | Local Plaid linking helper |
 | `ROBINHOOD_SESSION_B64` | No | Local Robinhood linking helper |
 
-Create this **repository variable** under the Variables tab:
+Create these **repository variables** under the Variables tab:
 
 | Variable | Value |
 | --- | --- |
-| `PLAID_ENV` | `sandbox` during testing, then `production` for Bank of America |
+| `PLAID_ENV` | `sandbox` during testing, then `production` for real institutions |
+| `PLAID_COUNTRY_CODES` | Comma-separated Plaid regions such as `US` or `US,CA` |
 | `APP_TIMEZONE` | An IANA timezone such as `America/New_York` |
 
 GitHub documents the UI flow in
@@ -396,14 +418,16 @@ gh secret set SUPABASE_URL
 gh secret set SUPABASE_SECRET_KEY
 gh secret set PLAID_CLIENT_ID
 gh secret set PLAID_SECRET
-gh secret set PLAID_ACCESS_TOKEN
+gh secret set PLAID_ACCESS_TOKENS
 gh variable set PLAID_ENV
+gh variable set PLAID_COUNTRY_CODES
 gh variable set APP_TIMEZONE
 ```
 
-The Robinhood helper sets its session secret automatically when run with
-`--github`; do not paste the session into a shell command. Verify names, not
-values:
+The Plaid and Robinhood helpers set their provider secrets automatically when
+run with `--github`; do not paste credentials into a shell command. If setting
+`PLAID_ACCESS_TOKENS` manually, its value must be a JSON array such as
+`["access-production-..."]`. Verify names, not values:
 
 ```bash
 gh secret list
@@ -424,9 +448,10 @@ current
 
 ### Sync frequency and provider limits
 
-Every three hours means eight runs per day. Each normal run makes one Plaid
-real-time balance request and then incrementally consumes available transaction
-changes. Plaid currently documents these Production per-Item limits:
+Every three hours means eight runs per day. For each connected Plaid Item, a
+normal run makes one real-time balance request and then incrementally consumes
+available transaction changes. Plaid currently documents these Production
+per-Item limits:
 
 - `/accounts/balance/get`: 5 requests per minute and 30 per hour.
 - `/transactions/sync`: 50 requests per minute.
@@ -516,9 +541,11 @@ value belongs.
 | `SUPABASE_URL` | Treat as config | Yes | No | Yes | Supabase Data API base URL |
 | `SUPABASE_SECRET_KEY` | Yes | Yes | No | Yes | Server-only sync writes |
 | `PLAID_ENV` | No | Yes | No | Variable | `sandbox` or `production` |
+| `PLAID_COUNTRY_CODES` | No | Yes | No | Variable | Institution regions shown in Link |
 | `PLAID_CLIENT_ID` | Yes | Yes | No | Yes | Plaid application identifier |
 | `PLAID_SECRET` | Yes | Yes | No | Yes | Environment-specific Plaid secret |
-| `PLAID_ACCESS_TOKEN` | Yes | Yes | No | Yes | Long-lived Item credential |
+| `PLAID_ACCESS_TOKENS` | Yes | Yes | No | Yes | JSON array of long-lived Item credentials |
+| `PLAID_ACCESS_TOKEN` | Yes | Legacy only | No | Legacy only | Backward-compatible single Item credential |
 | `ROBINHOOD_USERNAME` | Yes | Link only | No | No | One-time local Robinhood login |
 | `ROBINHOOD_PASSWORD` | Yes | Link only | No | No | One-time local Robinhood login |
 | `ROBINHOOD_SESSION_B64` | Yes | Optional | No | Optional | Reusable read-only sync session |
@@ -547,8 +574,9 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r scripts/requirements.txt
 
-# Link a Plaid Item and test each source without writes
+# Link one or more Plaid Items and test each source without writes
 python scripts/plaid_link.py --github
+# Repeat the previous command to add another institution
 python scripts/sync.py --source plaid --dry-run
 python scripts/robinhood_link.py --github
 python scripts/sync.py --source robinhood --dry-run
@@ -594,11 +622,13 @@ development while using injected environment variables in GitHub Actions.
 
 ## Troubleshooting
 
-### Bank of America is not visible in Plaid Link
+### An institution is not visible in Plaid Link
 
-Confirm that `PLAID_ENV=production`, the secret is the Production secret, and
-Trial approval is complete. Plaid notes that OAuth availability may take 6–24
-hours after approval.
+Confirm that `PLAID_ENV`, its matching secret, and `PLAID_COUNTRY_CODES` describe
+the Plaid access enabled for the fork. Link only shows institutions that support
+the required Transactions product in the requested countries. Trial is limited
+to US and Canadian institutions, and newly approved OAuth institutions may take
+6–24 hours to appear.
 
 ### Plaid reports `INVALID_API_KEYS`
 
@@ -608,19 +638,24 @@ For disposable test data, pair the Sandbox secret with `PLAID_ENV=sandbox`.
 
 ### Plaid reports `ITEM_LOGIN_REQUIRED`
 
-The bank connection needs user attention. Re-run the linking helper in update
-mode after Step 3, complete Bank of America's OAuth flow, replace the GitHub
-`PLAID_ACCESS_TOKEN` only if the helper says it changed, and manually rerun the
-workflow.
+The institution connection needs user attention. Re-run the linking helper in
+update mode after Step 3 and manually rerun the workflow:
+
+```bash
+# N is the 1-based position in PLAID_ACCESS_TOKENS.
+.venv/bin/python scripts/plaid_link.py --update --item-index N --github
+```
+
+Plaid update mode keeps the existing access token; the helper republishes the
+unchanged credential array after the repair succeeds.
 
 ### Transactions on the same date have no time
 
 Plaid's standard transaction object always includes a posting date, but its
 `datetime` and `authorized_datetime` fields are optional and institution
-dependent. New syncs preserve either timestamp when available. If Bank of
-America returns only the date, the dashboard shows **Time unavailable** and uses
-a stable fallback order rather than implying that one transaction happened
-before another.
+dependent. New syncs preserve either timestamp when available. If the institution
+returns only the date, the dashboard shows **Time unavailable** and uses a stable
+fallback order rather than implying that one transaction happened before another.
 
 ### Supabase returns `401` or permission errors
 
@@ -660,7 +695,8 @@ a quick verification.
 │   └── lib/                    # Auth, overview/detail queries, and formatting
 ├── drizzle/                    # Versioned PostgreSQL migrations
 ├── scripts/
-│   ├── plaid_link.py           # One-time local Plaid bootstrap
+│   ├── plaid_config.py         # Multi-Item and country configuration parser
+│   ├── plaid_link.py           # Add or repair local Plaid Items
 │   ├── robinhood_link.py       # One-time SMS/app approval bootstrap
 │   ├── sync.py                 # Idempotent scheduled sync
 │   ├── test_sync.py            # Provider normalization unit tests
@@ -673,7 +709,7 @@ a quick verification.
 ## Disclaimer
 
 This is an independent personal project, not financial advice, and is not
-affiliated with Plaid, Bank of America, Robinhood, Supabase, Vercel, or GitHub.
+affiliated with Plaid, Robinhood, Supabase, Vercel, or GitHub.
 `robin_stocks` relies on an unofficial API and may stop working at any time. Use
 the software at your own risk and review the terms that apply to each connected
 account.
