@@ -439,8 +439,11 @@ export type HoldingRow = {
 export type InvestmentsData = {
   holdings: HoldingRow[];
   allocation: { type: string; value: number; percent: number }[];
+  history: { date: string; value: number }[];
   metrics: {
     value: number;
+    investedValue: number;
+    cashBalance: number;
     costBasis: number;
     gain: number;
     gainPercent: number | null;
@@ -451,26 +454,46 @@ export type InvestmentsData = {
 export async function getInvestmentsData(): Promise<InvestmentsData> {
   await requireSession();
   const db = getDb();
-  const result = await db.execute(sql`
-    select
-      h.id,
-      h.symbol,
-      h.name,
-      h.asset_type,
-      h.quantity::float8 as quantity,
-      h.average_cost::float8 as average_cost,
-      h.current_price::float8 as current_price,
-      h.current_value::float8 as current_value,
-      h.cost_basis::float8 as cost_basis,
-      h.unrealized_gain::float8 as unrealized_gain,
-      h.unrealized_gain_percent::float8 as unrealized_gain_percent,
-      h.synced_at::text,
-      a.name as account_name
-    from public.holdings h
-    join public.accounts a on a.id = h.account_id
-    order by h.current_value desc, h.symbol
-  `);
-  const holdings = (result as Row[]).map((item) => ({
+  const [holdingsResult, historyResult, portfolioResult] = await Promise.all([
+    db.execute(sql`
+      select
+        h.id,
+        h.symbol,
+        h.name,
+        h.asset_type,
+        h.quantity::float8 as quantity,
+        h.average_cost::float8 as average_cost,
+        h.current_price::float8 as current_price,
+        h.current_value::float8 as current_value,
+        h.cost_basis::float8 as cost_basis,
+        h.unrealized_gain::float8 as unrealized_gain,
+        h.unrealized_gain_percent::float8 as unrealized_gain_percent,
+        h.synced_at::text,
+        a.name as account_name
+      from public.holdings h
+      join public.accounts a on a.id = h.account_id
+      order by h.current_value desc, h.symbol
+    `),
+    db.execute(sql`
+      select
+        bs.snapshot_date::text as date,
+        sum(bs.balance)::float8 as value
+      from public.balance_snapshots bs
+      join public.accounts a on a.id = bs.account_id
+      where bs.snapshot_date >= current_date - interval '365 days'
+        and a.connected = true
+        and (a.account_type = 'investment' or a.source = 'robinhood')
+      group by bs.snapshot_date
+      order by bs.snapshot_date
+    `),
+    db.execute(sql`
+      select coalesce(sum(current_balance), 0)::float8 as value
+      from public.accounts
+      where connected = true
+        and (account_type = 'investment' or source = 'robinhood')
+    `),
+  ]);
+  const holdings = (holdingsResult as Row[]).map((item) => ({
     id: numberValue(item.id),
     symbol: stringValue(item.symbol),
     name: stringValue(item.name),
@@ -491,7 +514,11 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
     accountName: stringValue(item.account_name),
     syncedAt: stringValue(item.synced_at),
   }));
-  const value = holdings.reduce((sum, item) => sum + item.currentValue, 0);
+  const investedValue = holdings.reduce(
+    (sum, item) => sum + item.currentValue,
+    0,
+  );
+  const portfolioValue = numberValue((portfolioResult as Row[])[0]?.value);
   const costBasis = holdings.reduce(
     (sum, item) => sum + (item.costBasis ?? 0),
     0,
@@ -506,16 +533,24 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
 
   return {
     holdings,
+    history: (historyResult as Row[]).map((item) => ({
+      date: stringValue(item.date),
+      value: numberValue(item.value),
+    })),
     allocation: Array.from(allocationMap, ([type, allocationValue]) => ({
       type,
       value: allocationValue,
-      percent: value ? (allocationValue / value) * 100 : 0,
+      percent: investedValue ? (allocationValue / investedValue) * 100 : 0,
     })).sort((a, b) => b.value - a.value),
     metrics: {
-      value,
+      value: portfolioValue,
+      investedValue,
+      cashBalance: portfolioValue - investedValue,
       costBasis,
-      gain: value - costBasis,
-      gainPercent: costBasis ? ((value - costBasis) / costBasis) * 100 : null,
+      gain: investedValue - costBasis,
+      gainPercent: costBasis
+        ? ((investedValue - costBasis) / costBasis) * 100
+        : null,
       positions: holdings.length,
     },
   };
