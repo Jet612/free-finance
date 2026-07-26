@@ -4,19 +4,10 @@ import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { z } from "zod";
 
 import { getDb } from "@/db/client";
-import {
-  createSession,
-  deleteSession,
-  passwordMatches,
-  requireSession,
-} from "@/lib/auth";
-
-export type LoginState = {
-  message?: string;
-};
+import { requireSession } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 
 export type SyncActionState = {
   status: "idle" | "queued" | "cooldown" | "error";
@@ -25,41 +16,12 @@ export type SyncActionState = {
   runUrl?: string;
 };
 
-const LoginSchema = z.object({
-  password: z.string().min(1),
-});
-
 const SYNC_REQUEST_COOKIE = "free_finance_sync_requested_at";
 const SYNC_COOLDOWN_MS = 10 * 60 * 1000;
 
-export async function login(
-  _previousState: LoginState,
-  formData: FormData,
-): Promise<LoginState> {
-  const parsed = LoginSchema.safeParse({
-    password: formData.get("password"),
-  });
-  if (!parsed.success) {
-    return { message: "Enter your dashboard password." };
-  }
-
-  try {
-    if (!(await passwordMatches(parsed.data.password))) {
-      return { message: "That password is not correct." };
-    }
-    await createSession();
-  } catch {
-    return {
-      message:
-        "Dashboard authentication is not configured. Check the server environment.",
-    };
-  }
-
-  redirect("/");
-}
-
 export async function logout(): Promise<void> {
-  await deleteSession();
+  const supabase = await createClient();
+  await supabase.auth.signOut({ scope: "local" });
   redirect("/login");
 }
 

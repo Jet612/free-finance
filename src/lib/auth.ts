@@ -1,92 +1,75 @@
 import "server-only";
 
 import { cache } from "react";
-import {
-  createHmac,
-  createHash,
-  randomBytes,
-  timingSafeEqual,
-} from "node:crypto";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-const COOKIE_NAME = "free_finance_session";
-const SESSION_SECONDS = 60 * 60 * 24 * 7;
+import { createClient } from "@/lib/supabase/server";
 
-function requiredSecret(): string {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error("SESSION_SECRET must contain at least 32 characters.");
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type AuthState = {
+  user: {
+    id: string;
+    email: string | null;
+  };
+  currentLevel: string | null;
+  nextLevel: string | null;
+  needsMfa: boolean;
+};
+
+function ownerUserId(): string {
+  const userId = process.env.DASHBOARD_USER_ID?.trim();
+  if (!userId || !UUID_PATTERN.test(userId)) {
+    throw new Error(
+      "DASHBOARD_USER_ID must be the UUID of the manually provisioned Supabase user.",
+    );
   }
-  return secret;
+  return userId;
 }
 
-function digest(value: string): Buffer {
-  return createHash("sha256").update(value).digest();
-}
+export const getAuthState = cache(async (): Promise<AuthState | null> => {
+  const supabase = await createClient();
+  // getUser() asks Supabase Auth instead of trusting a client-controlled cookie.
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
 
-function sign(payload: string): string {
-  return createHmac("sha256", requiredSecret())
-    .update(payload)
-    .digest("base64url");
-}
+  if (error || !user || user.id !== ownerUserId()) return null;
 
-function safeEqual(left: string, right: string): boolean {
-  return timingSafeEqual(digest(left), digest(right));
-}
+  const { data: assurance, error: assuranceError } =
+    await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (assuranceError) return null;
 
-function createToken(): string {
-  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
-  // A nonce makes simultaneous sessions distinct without storing server state.
-  const payload = `v1.${expiresAt}.${randomBytes(16).toString("base64url")}`;
-  return `${payload}.${sign(payload)}`;
-}
-
-export function verifyToken(token: string | undefined): boolean {
-  if (!token) return false;
-  const parts = token.split(".");
-  if (parts.length !== 4 || parts[0] !== "v1") return false;
-  const payload = parts.slice(0, 3).join(".");
-  const signature = parts[3];
-  const expiresAt = Number(parts[1]);
-  return (
-    Number.isFinite(expiresAt) &&
-    expiresAt > Math.floor(Date.now() / 1000) &&
-    safeEqual(signature, sign(payload))
-  );
-}
-
-export async function passwordMatches(candidate: string): Promise<boolean> {
-  const expected = process.env.DASHBOARD_PASSWORD;
-  if (!expected || expected.length < 12) {
-    throw new Error("DASHBOARD_PASSWORD must contain at least 12 characters.");
-  }
-  return safeEqual(candidate, expected);
-}
-
-export async function createSession(): Promise<void> {
-  const cookieStore = await cookies();
-  cookieStore.set(COOKIE_NAME, createToken(), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: SESSION_SECONDS,
-    priority: "high",
-  });
-}
-
-export async function deleteSession(): Promise<void> {
-  (await cookies()).delete(COOKIE_NAME);
-}
-
-export const hasSession = cache(async (): Promise<boolean> => {
-  const token = (await cookies()).get(COOKIE_NAME)?.value;
-  return verifyToken(token);
+  const currentLevel = assurance.currentLevel;
+  const nextLevel = assurance.nextLevel;
+  return {
+    user: {
+      id: user.id,
+      email: user.email ?? null,
+    },
+    currentLevel,
+    nextLevel,
+    // Once a user opts into TOTP, completing it is required for that session.
+    needsMfa: nextLevel === "aal2" && currentLevel !== "aal2",
+  };
 });
 
-export const requireSession = cache(async (): Promise<void> => {
-  if (!(await hasSession())) {
-    redirect("/login");
-  }
-});
+export async function hasSession(): Promise<boolean> {
+  const state = await getAuthState();
+  return Boolean(state && !state.needsMfa);
+}
+
+export async function requireSession(): Promise<AuthState> {
+  const state = await getAuthState();
+  if (!state) redirect("/login");
+  if (state.needsMfa) redirect("/mfa");
+  return state;
+}
+
+export async function requirePrimarySession(): Promise<AuthState> {
+  const state = await getAuthState();
+  if (!state) redirect("/login");
+  return state;
+}
