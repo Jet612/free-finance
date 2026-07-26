@@ -303,6 +303,8 @@ export type SetupSource = {
   lastSuccessAt: string | null;
   lastError: string | null;
   accounts: number;
+  connections: number;
+  institutions: string[];
 };
 
 export type SetupData = {
@@ -327,7 +329,13 @@ export async function getSetupData(): Promise<SetupData> {
         where source in ('plaid', 'robinhood')
       ),
       account_rows as (
-        select source::text, count(*)::int as count
+        select
+          source::text,
+          count(*)::int as count,
+          count(distinct coalesce(metadata->>'item_id', external_id))::int
+            as connections,
+          array_agg(distinct institution_name order by institution_name)
+            as institutions
         from public.accounts
         group by source
       )
@@ -349,6 +357,20 @@ export async function getSetupData(): Promise<SetupData> {
       numberValue(row.count),
     ]),
   );
+  const connectionCounts = new Map(
+    (countRows as Row[]).map((row) => [
+      String(row.source),
+      numberValue(row.connections),
+    ]),
+  );
+  const institutions = new Map(
+    (countRows as Row[]).map((row) => [
+      String(row.source),
+      Array.isArray(row.institutions)
+        ? row.institutions.map(String)
+        : [],
+    ]),
+  );
 
   const sources: SetupSource[] = (["plaid", "robinhood"] as const).map((source) => {
     const state = states.get(source);
@@ -362,11 +384,13 @@ export async function getSetupData(): Promise<SetupData> {
     return {
       source,
       status,
-      label: source === "plaid" ? "Plaid / Bank" : "Robinhood",
+      label: source === "plaid" ? "Plaid institutions" : "Robinhood",
       lastAttemptAt: state?.last_attempt_at?.toString() ?? null,
       lastSuccessAt: state?.last_success_at?.toString() ?? null,
       lastError: state?.last_error?.toString() ?? null,
       accounts: accountCount,
+      connections: connectionCounts.get(source) ?? 0,
+      institutions: institutions.get(source) ?? [],
     };
   });
 

@@ -60,6 +60,33 @@ function sourcePresentation(status: SetupSource["status"]) {
   };
 }
 
+function sourceSummary(source: SetupSource): string {
+  if (!source.accounts) {
+    return source.source === "plaid"
+      ? "Complete Hosted Link and run the workflow."
+      : "Add credentials only if you want brokerage sync.";
+  }
+
+  const accountLabel = `${source.accounts} account${source.accounts === 1 ? "" : "s"}`;
+  const connectionLabel =
+    source.source === "plaid" && source.connections
+      ? `${source.connections} connection${source.connections === 1 ? "" : "s"}`
+      : null;
+  const institutionLabel =
+    source.source === "plaid" && source.institutions.length
+      ? source.institutions.join(", ")
+      : null;
+
+  return [
+    connectionLabel,
+    accountLabel,
+    institutionLabel,
+    `Last success ${formatDateTime(source.lastSuccessAt)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export default async function SetupPage() {
   const data = await getSetupData();
   const completed =
@@ -133,11 +160,7 @@ export default async function SetupPage() {
               <CardContent>
                 <p className="font-medium">{source.label}</p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {source.accounts
-                    ? `${source.accounts} account${source.accounts === 1 ? "" : "s"} · Last success ${formatDateTime(source.lastSuccessAt)}`
-                    : source.source === "plaid"
-                      ? "Complete Hosted Link and run the workflow."
-                      : "Add credentials only if you want brokerage sync."}
+                  {sourceSummary(source)}
                 </p>
               </CardContent>
             </Card>
@@ -182,8 +205,8 @@ export default async function SetupPage() {
                   data.sources.find((source) => source.source === "plaid")
                     ?.status === "connected"
                 }
-                title="Bank connection"
-                detail="Authorize Bank of America through Plaid Hosted Link."
+                title="Financial institutions"
+                detail="Authorize any institution supported by Plaid Transactions in your configured countries."
               />
               <Separator />
               <ChecklistRow
@@ -208,7 +231,9 @@ export default async function SetupPage() {
           </CardHeader>
           <CardContent>
             <div className="rounded-xl border bg-muted/35 p-4 font-mono text-xs leading-6">
-              <p className="text-muted-foreground"># Connect Plaid once</p>
+              <p className="text-muted-foreground">
+                # Add a Plaid institution
+              </p>
               <p>.venv/bin/python scripts/plaid_link.py --github</p>
               <p className="mt-3 text-muted-foreground"># Verify and sync</p>
               <p>.venv/bin/python scripts/sync.py</p>

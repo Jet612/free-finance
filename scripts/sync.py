@@ -41,6 +41,17 @@ from plaid.model.transactions_sync_request_options import (
 )
 from supabase import Client, create_client
 
+if __package__:
+    from .plaid_config import (
+        parse_access_tokens,
+        parse_country_codes,
+    )
+else:
+    from plaid_config import (
+        parse_access_tokens,
+        parse_country_codes,
+    )
+
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env.local", override=False)
 
@@ -66,18 +77,30 @@ class Settings:
     plaid_environment: str
     plaid_client_id: str
     plaid_secret: str
-    plaid_access_token: str
+    plaid_access_tokens: tuple[str, ...]
+    plaid_country_codes: tuple[str, ...]
     robinhood_session_b64: str
 
     @classmethod
     def from_environment(cls) -> "Settings":
+        try:
+            access_tokens = parse_access_tokens(
+                os.getenv("PLAID_ACCESS_TOKENS", ""),
+                os.getenv("PLAID_ACCESS_TOKEN", ""),
+            )
+            country_codes = parse_country_codes(
+                os.getenv("PLAID_COUNTRY_CODES", "US")
+            )
+        except ValueError as error:
+            raise SyncError(str(error)) from error
         return cls(
             supabase_url=os.getenv("SUPABASE_URL", "").strip(),
             supabase_secret_key=os.getenv("SUPABASE_SECRET_KEY", "").strip(),
             plaid_environment=os.getenv("PLAID_ENV", "sandbox").strip().lower(),
             plaid_client_id=os.getenv("PLAID_CLIENT_ID", "").strip(),
             plaid_secret=os.getenv("PLAID_SECRET", "").strip(),
-            plaid_access_token=os.getenv("PLAID_ACCESS_TOKEN", "").strip(),
+            plaid_access_tokens=access_tokens,
+            plaid_country_codes=country_codes,
             robinhood_session_b64=os.getenv(
                 "ROBINHOOD_SESSION_B64", ""
             ).strip(),
@@ -86,7 +109,7 @@ class Settings:
     @property
     def plaid_configured(self) -> bool:
         return all(
-            (self.plaid_client_id, self.plaid_secret, self.plaid_access_token)
+            (self.plaid_client_id, self.plaid_secret, self.plaid_access_tokens)
         )
 
     @property
@@ -103,7 +126,7 @@ class Settings:
         if not self.plaid_configured:
             raise SyncError(
                 "Plaid is incomplete. Set PLAID_CLIENT_ID, PLAID_SECRET, and "
-                "PLAID_ACCESS_TOKEN."
+                "PLAID_ACCESS_TOKENS."
             )
         if self.plaid_environment not in {"sandbox", "production"}:
             raise SyncError("PLAID_ENV must be either sandbox or production.")
@@ -123,7 +146,7 @@ class Settings:
                 self.supabase_secret_key,
                 self.plaid_client_id,
                 self.plaid_secret,
-                self.plaid_access_token,
+                *self.plaid_access_tokens,
                 self.robinhood_session_b64,
             )
             if value
@@ -395,30 +418,68 @@ def plaid_error_code(error: ApiException) -> str | None:
 def fetch_plaid_institution_name(
     client: plaid_api.PlaidApi,
     access_token: str,
+    country_codes: tuple[str, ...],
     fallback: str = "Plaid",
 ) -> tuple[str, dict[str, Any]]:
+    item_response = client.item_get(
+        ItemGetRequest(access_token=access_token)
+    )
+    item = item_response.item
+    institution_id = item.institution_id
+    metadata = {
+        "item_id": item.item_id,
+        "institution_id": institution_id,
+    }
+    if not institution_id:
+        return fallback, metadata
     try:
-        item_response = client.item_get(
-            ItemGetRequest(access_token=access_token)
-        )
-        item = item_response.item
-        institution_id = item.institution_id
-        metadata = {
-            "item_id": item.item_id,
-            "institution_id": institution_id,
-        }
-        if not institution_id:
-            return fallback, metadata
         response = client.institutions_get_by_id(
             InstitutionsGetByIdRequest(
                 institution_id=institution_id,
-                country_codes=[CountryCode("US")],
+                country_codes=[
+                    CountryCode(code) for code in country_codes
+                ],
             )
         )
         return response.institution.name or fallback, metadata
     except Exception as error:  # Institution labels should not block balances.
         LOGGER.warning("Institution lookup failed: %s", type(error).__name__)
-        return fallback, {}
+        return fallback, metadata
+
+
+def parse_plaid_cursor_state(
+    value: str | None,
+    item_ids: Sequence[str],
+) -> dict[str, str]:
+    """Read per-Item cursors while accepting the original single cursor."""
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        # Before multi-Item support, `cursor` held Plaid's opaque cursor directly.
+        return {item_ids[0]: value} if item_ids else {}
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return {item_ids[0]: value} if item_ids else {}
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        return {item_ids[0]: value} if item_ids else {}
+    return {
+        str(item_id): str(cursor)
+        for item_id, cursor in items.items()
+        if isinstance(item_id, str)
+        and item_id
+        and isinstance(cursor, str)
+        and cursor
+    }
+
+
+def encode_plaid_cursor_state(cursors: dict[str, str]) -> str:
+    return json.dumps(
+        {"version": 1, "items": cursors},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def fetch_plaid_transaction_changes(
@@ -547,17 +608,17 @@ def plaid_transaction_row(transaction: Any, account_id: int) -> dict[str, Any]:
     }
 
 
-def sync_plaid(
-    settings: Settings, store: SyncStore
-) -> tuple[dict[str, int], str, dict[str, Any]]:
-    settings.validate_plaid()
-    client, _api_client = plaid_client(settings)
+def sync_plaid_item(
+    store: SyncStore,
+    client: plaid_api.PlaidApi,
+    access_token: str,
+    institution_name: str,
+    item_metadata: dict[str, Any],
+    starting_cursor: str | None,
+) -> tuple[dict[str, int], str]:
     synced_at = iso_now()
-    institution_name, item_metadata = fetch_plaid_institution_name(
-        client, settings.plaid_access_token
-    )
     balance_response = client.accounts_balance_get(
-        AccountsBalanceGetRequest(access_token=settings.plaid_access_token)
+        AccountsBalanceGetRequest(access_token=access_token)
     )
     account_rows = [
         plaid_account_row(account, institution_name, item_metadata, synced_at)
@@ -589,9 +650,8 @@ def sync_plaid(
         for row in account_rows
     ]
 
-    starting_cursor = store.get_cursor("plaid")
     added, modified, removed, next_cursor = fetch_plaid_transaction_changes(
-        client, settings.plaid_access_token, starting_cursor
+        client, access_token, starting_cursor
     )
     changed = [*added, *modified]
     transaction_rows = [
@@ -625,8 +685,77 @@ def sync_plaid(
         "transactions_modified": len(modified),
         "transactions_removed": deleted,
     }
-    return counts, next_cursor, {
-        "institution": institution_name,
+    return counts, next_cursor
+
+
+def sync_plaid(
+    settings: Settings, store: SyncStore
+) -> tuple[dict[str, int], str, dict[str, Any]]:
+    settings.validate_plaid()
+    client, _api_client = plaid_client(settings)
+    items: list[tuple[str, str, dict[str, Any]]] = []
+    for index, access_token in enumerate(
+        settings.plaid_access_tokens,
+        start=1,
+    ):
+        try:
+            institution_name, item_metadata = fetch_plaid_institution_name(
+                client,
+                access_token,
+                settings.plaid_country_codes,
+            )
+        except Exception as error:
+            raise SyncError(
+                f"Plaid Item {index} could not be read: {error}"
+            ) from error
+        item_id = str(item_metadata.get("item_id") or "")
+        if not item_id:
+            raise SyncError(f"Plaid Item {index} did not return an Item ID.")
+        items.append((access_token, institution_name, item_metadata))
+
+    item_ids = [str(metadata["item_id"]) for _, _, metadata in items]
+    cursor_state = parse_plaid_cursor_state(
+        store.get_cursor("plaid"),
+        item_ids,
+    )
+    next_cursor_state = dict(cursor_state)
+    totals: dict[str, int] = {}
+    institutions: list[str] = []
+
+    for index, (
+        access_token,
+        institution_name,
+        item_metadata,
+    ) in enumerate(items, start=1):
+        item_id = str(item_metadata["item_id"])
+        try:
+            counts, next_cursor = sync_plaid_item(
+                store,
+                client,
+                access_token,
+                institution_name,
+                item_metadata,
+                cursor_state.get(item_id),
+            )
+        except Exception as error:
+            raise SyncError(
+                f"Plaid Item {index} ({institution_name}) failed: {error}"
+            ) from error
+        for label, count in counts.items():
+            totals[label] = totals.get(label, 0) + count
+        next_cursor_state[item_id] = next_cursor
+        institutions.append(institution_name)
+
+    unique_institutions = list(dict.fromkeys(institutions))
+    return totals, encode_plaid_cursor_state(next_cursor_state), {
+        "institution": (
+            unique_institutions[0]
+            if len(unique_institutions) == 1
+            else f"{len(unique_institutions)} institutions"
+        ),
+        "institutions": unique_institutions,
+        "items": len(items),
+        "countries": list(settings.plaid_country_codes),
         "environment": settings.plaid_environment,
     }
 
@@ -945,7 +1074,12 @@ def main() -> int:
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    settings = Settings.from_environment()
+    try:
+        settings = Settings.from_environment()
+    except Exception as error:
+        LOGGER.error("Configuration failed: %s", error)
+        return 2
+
     try:
         settings.validate_database()
         client = create_client(
@@ -964,6 +1098,9 @@ def main() -> int:
                 {
                     "database": "ok",
                     "plaid_configured": settings.plaid_configured,
+                    "plaid_items_configured": len(
+                        settings.plaid_access_tokens
+                    ),
                     "robinhood_configured": settings.robinhood_configured,
                 }
             )

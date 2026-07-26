@@ -39,8 +39,11 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       PLAID_ENV: ${{ vars.PLAID_ENV || 'sandbox' }}
+      PLAID_COUNTRY_CODES: ${{ vars.PLAID_COUNTRY_CODES || 'US' }}
       PLAID_CLIENT_ID: ${{ secrets.PLAID_CLIENT_ID }}
       PLAID_SECRET: ${{ secrets.PLAID_SECRET }}
+      PLAID_ACCESS_TOKENS: ${{ secrets.PLAID_ACCESS_TOKENS }}
+      # Accepted during migration from versions that stored one Plaid Item.
       PLAID_ACCESS_TOKEN: ${{ secrets.PLAID_ACCESS_TOKEN }}
       ROBINHOOD_SESSION_B64: ${{ secrets.ROBINHOOD_SESSION_B64 }}
 

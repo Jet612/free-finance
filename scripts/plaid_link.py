@@ -34,6 +34,19 @@ from plaid.model.link_token_get_request import LinkTokenGetRequest
 from plaid.model.link_token_transactions import LinkTokenTransactions
 from plaid.model.products import Products
 
+if __package__:
+    from .plaid_config import (
+        encode_access_tokens,
+        parse_access_tokens,
+        parse_country_codes,
+    )
+else:
+    from plaid_config import (
+        encode_access_tokens,
+        parse_access_tokens,
+        parse_country_codes,
+    )
+
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env.local"
 load_dotenv(ENV_PATH, override=False)
@@ -132,9 +145,23 @@ def report_plaid_api_error(error: ApiException, environment: str) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--migrate",
+        action="store_true",
+        help=(
+            "Convert an existing single-Item token to the multi-Item format "
+            "without opening Link."
+        ),
+    )
+    parser.add_argument(
         "--update",
         action="store_true",
-        help="Repair the existing PLAID_ACCESS_TOKEN in update mode.",
+        help="Repair an existing Plaid Item in update mode.",
+    )
+    parser.add_argument(
+        "--item-index",
+        type=int,
+        default=1,
+        help="1-based Plaid Item to repair with --update (default: 1).",
     )
     parser.add_argument(
         "--no-browser",
@@ -144,16 +171,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--github",
         action="store_true",
-        help="Publish the access token and Plaid environment with GitHub CLI.",
+        help="Publish Plaid Item tokens and configuration with GitHub CLI.",
     )
     return parser.parse_args()
+
+
+def save_plaid_config(
+    access_tokens: tuple[str, ...],
+    country_codes: tuple[str, ...],
+) -> None:
+    """Persist Item credentials and regions without printing their values."""
+    if not ENV_PATH.exists():
+        ENV_PATH.touch(mode=stat.S_IRUSR | stat.S_IWUSR)
+    set_key(
+        str(ENV_PATH),
+        "PLAID_ACCESS_TOKENS",
+        encode_access_tokens(access_tokens),
+        quote_mode="always",
+    )
+    set_key(
+        str(ENV_PATH),
+        "PLAID_COUNTRY_CODES",
+        ",".join(country_codes),
+        quote_mode="never",
+    )
+    ENV_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
 
 def publish_to_github(
     client_id: str,
     secret: str,
-    access_token: str,
+    access_tokens: tuple[str, ...],
     environment: str,
+    country_codes: tuple[str, ...],
 ) -> bool:
     """Send secrets over stdin so credentials never enter shell history."""
     if not shutil.which("gh"):
@@ -166,7 +216,7 @@ def publish_to_github(
         for name, value in {
             "PLAID_CLIENT_ID": client_id,
             "PLAID_SECRET": secret,
-            "PLAID_ACCESS_TOKEN": access_token,
+            "PLAID_ACCESS_TOKENS": encode_access_tokens(access_tokens),
         }.items():
             subprocess.run(
                 ["gh", "secret", "set", name],
@@ -180,13 +230,28 @@ def publish_to_github(
             cwd=ROOT,
             check=True,
         )
+        subprocess.run(
+            [
+                "gh",
+                "variable",
+                "set",
+                "PLAID_COUNTRY_CODES",
+                "--body",
+                ",".join(country_codes),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
     except subprocess.CalledProcessError:
         print(
             "GitHub publishing failed; the token is safe in .env.local.",
             file=sys.stderr,
         )
         return False
-    print("GitHub Actions received the Plaid credentials and PLAID_ENV.")
+    print(
+        "GitHub Actions received the Plaid credentials, Items, environment, "
+        "and country configuration."
+    )
     return True
 
 
@@ -195,16 +260,64 @@ def main() -> int:
     client_id = os.getenv("PLAID_CLIENT_ID", "").strip()
     secret = os.getenv("PLAID_SECRET", "").strip()
     environment = os.getenv("PLAID_ENV", "sandbox").strip().lower()
-    existing_access_token = os.getenv("PLAID_ACCESS_TOKEN", "").strip()
+    try:
+        access_tokens = parse_access_tokens(
+            os.getenv("PLAID_ACCESS_TOKENS", ""),
+            os.getenv("PLAID_ACCESS_TOKEN", ""),
+        )
+        country_codes = parse_country_codes(
+            os.getenv("PLAID_COUNTRY_CODES", "US")
+        )
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     if not client_id or not secret:
         print("Set PLAID_CLIENT_ID and PLAID_SECRET in .env.local.", file=sys.stderr)
         return 2
     if environment not in {"sandbox", "production"}:
         print("PLAID_ENV must be sandbox or production.", file=sys.stderr)
         return 2
-    if args.update and not existing_access_token:
-        print("--update requires an existing PLAID_ACCESS_TOKEN.", file=sys.stderr)
+    if args.item_index < 1:
+        print("--item-index must be 1 or greater.", file=sys.stderr)
         return 2
+    if args.migrate and args.update:
+        print("--migrate and --update cannot be combined.", file=sys.stderr)
+        return 2
+    if not args.update and args.item_index != 1:
+        print("--item-index is only used with --update.", file=sys.stderr)
+        return 2
+    if args.migrate and not access_tokens:
+        print("--migrate requires an existing Plaid Item token.", file=sys.stderr)
+        return 2
+    if args.update and not access_tokens:
+        print("--update requires an existing Plaid Item token.", file=sys.stderr)
+        return 2
+    if args.update and args.item_index > len(access_tokens):
+        print(
+            f"--item-index {args.item_index} exceeds the "
+            f"{len(access_tokens)} configured Plaid Item(s).",
+            file=sys.stderr,
+        )
+        return 2
+    selected_access_token = (
+        access_tokens[args.item_index - 1] if args.update else None
+    )
+
+    if args.migrate:
+        save_plaid_config(access_tokens, country_codes)
+        print(
+            f"Migrated {len(access_tokens)} Plaid Item(s) to "
+            "PLAID_ACCESS_TOKENS without printing their credentials."
+        )
+        if args.github and not publish_to_github(
+            client_id,
+            secret,
+            access_tokens,
+            environment,
+            country_codes,
+        ):
+            return 1
+        return 0
 
     host = (
         plaid.Environment.Sandbox
@@ -220,7 +333,7 @@ def main() -> int:
     request_values: dict[str, Any] = {
         "client_name": os.getenv("APP_NAME", "Free Finance"),
         "language": "en",
-        "country_codes": [CountryCode("US")],
+        "country_codes": [CountryCode(code) for code in country_codes],
         "user": LinkTokenCreateRequestUser(
             client_user_id="free-finance-owner"
         ),
@@ -229,7 +342,7 @@ def main() -> int:
         ),
     }
     if args.update:
-        request_values["access_token"] = existing_access_token
+        request_values["access_token"] = selected_access_token
     else:
         request_values["products"] = [Products("transactions")]
         request_values["transactions"] = LinkTokenTransactions(
@@ -248,7 +361,10 @@ def main() -> int:
         print("Plaid did not return a Hosted Link URL.", file=sys.stderr)
         return 1
 
-    print(f"Open this private URL to connect your bank:\n{hosted_url}")
+    print(
+        "Open this private URL to connect a financial institution:"
+        f"\n{hosted_url}"
+    )
     if not args.no_browser:
         webbrowser.open(hosted_url)
     print("Waiting up to 30 minutes for Plaid Link to finish...")
@@ -263,30 +379,30 @@ def main() -> int:
             return report_plaid_api_error(error, environment)
         tokens = find_public_tokens(status)
         if tokens:
-            try:
-                exchange = api.item_public_token_exchange(
-                    ItemPublicTokenExchangeRequest(public_token=tokens[0])
-                )
-            except ApiException as error:
-                return report_plaid_api_error(error, environment)
-            if not ENV_PATH.exists():
-                ENV_PATH.touch(mode=stat.S_IRUSR | stat.S_IWUSR)
-            set_key(
-                str(ENV_PATH),
-                "PLAID_ACCESS_TOKEN",
-                exchange.access_token,
-                quote_mode="never",
-            )
-            ENV_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            next_access_tokens = list(access_tokens)
+            for public_token in tokens:
+                try:
+                    exchange = api.item_public_token_exchange(
+                        ItemPublicTokenExchangeRequest(
+                            public_token=public_token
+                        )
+                    )
+                except ApiException as error:
+                    return report_plaid_api_error(error, environment)
+                next_access_tokens.append(exchange.access_token)
+            combined_tokens = tuple(dict.fromkeys(next_access_tokens))
+            save_plaid_config(combined_tokens, country_codes)
             print(
-                "Bank connected. PLAID_ACCESS_TOKEN was saved to .env.local "
-                "without printing it."
+                f"Connected {len(tokens)} Plaid Item(s). "
+                f"{len(combined_tokens)} total Item(s) are saved in "
+                ".env.local without printing their credentials."
             )
             if args.github and not publish_to_github(
                 client_id,
                 secret,
-                exchange.access_token,
+                combined_tokens,
                 environment,
+                country_codes,
             ):
                 return 1
             print(
@@ -303,15 +419,16 @@ def main() -> int:
             if args.github and not publish_to_github(
                 client_id,
                 secret,
-                existing_access_token,
+                access_tokens,
                 environment,
+                country_codes,
             ):
                 return 1
             return 0
         if session_exited(status):
             print(
-                "Plaid Link exited before a bank was connected. Re-run this "
-                "command when ready.",
+                "Plaid Link exited before an institution was connected. "
+                "Re-run this command when ready.",
                 file=sys.stderr,
             )
             return 1
