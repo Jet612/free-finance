@@ -114,6 +114,12 @@ export const transactions = pgTable(
     externalId: text("external_id").notNull(),
     transactionDate: date("transaction_date", { mode: "string" }).notNull(),
     authorizedDate: date("authorized_date", { mode: "string" }),
+    // Plaid only supplies a time for some transactions. Keep it nullable so
+    // posted-date-only records are never given a made-up time in the UI.
+    transactionAt: timestamp("transaction_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
     name: text().notNull(),
     merchantName: text("merchant_name"),
     // Positive means money in; negative means money out across every source.
@@ -140,10 +146,35 @@ export const transactions = pgTable(
       table.transactionDate,
     ),
     index("transactions_date_idx").on(table.transactionDate),
+    index("transactions_at_idx").on(table.transactionAt),
     index("transactions_category_date_idx").on(
       table.categoryPrimary,
       table.transactionDate,
     ),
+  ],
+);
+
+export const budgets = pgTable(
+  "budgets",
+  {
+    id: bigint({ mode: "number" })
+      .primaryKey()
+      .generatedAlwaysAsIdentity(),
+    categoryPrimary: text("category_primary").notNull(),
+    monthlyLimit: numeric("monthly_limit", {
+      precision: 19,
+      scale: 4,
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("budgets_category_primary_uidx").on(table.categoryPrimary),
+    check("budgets_monthly_limit_positive", sql`${table.monthlyLimit} > 0`),
   ],
 );
 
@@ -241,4 +272,5 @@ export const syncRuns = pgTable(
 export type Account = typeof accounts.$inferSelect;
 export type BalanceSnapshot = typeof balanceSnapshots.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type Budget = typeof budgets.$inferSelect;
 export type Holding = typeof holdings.$inferSelect;

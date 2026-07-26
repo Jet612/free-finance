@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -22,6 +23,7 @@ import {
   formatCurrency,
   titleCase,
 } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 const netWorthConfig = {
   value: {
@@ -46,6 +48,16 @@ function shortDate(value: string): string {
 }
 
 export function NetWorthChart({ data }: { data: TrendPoint[] }) {
+  const [range, setRange] = useState<"30D" | "90D" | "1Y">("90D");
+  const visibleData = useMemo(() => {
+    if (!data.length) return data;
+    const days = range === "30D" ? 30 : range === "90D" ? 90 : 365;
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - days);
+    const cutoffDate = cutoff.toISOString().slice(0, 10);
+    return data.filter((point) => point.date >= cutoffDate);
+  }, [data, range]);
+
   if (!data.length) {
     return (
       <ChartEmptyState
@@ -56,11 +68,37 @@ export function NetWorthChart({ data }: { data: TrendPoint[] }) {
   }
 
   return (
-    <ChartContainer
-      config={netWorthConfig}
-      className="h-[280px] w-full aspect-auto"
-    >
-      <AreaChart data={data} margin={{ left: 4, right: 12, top: 12 }}>
+    <div>
+      <div className="mb-3 flex justify-end">
+        <div
+          className="inline-flex rounded-lg border bg-background p-0.5"
+          aria-label="Net worth time range"
+        >
+          {(["30D", "90D", "1Y"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setRange(option)}
+              aria-pressed={range === option}
+              className={cn(
+                "h-7 rounded-md px-3 text-[11px] font-medium text-muted-foreground transition-colors",
+                range === option &&
+                  "bg-primary/10 text-primary ring-1 ring-primary/25",
+              )}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      </div>
+      <ChartContainer
+        config={netWorthConfig}
+        className="h-[240px] w-full aspect-auto sm:h-[280px]"
+      >
+        <AreaChart
+          data={visibleData}
+          margin={{ left: 4, right: 12, top: 12 }}
+        >
         <defs>
           <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
             <stop
@@ -113,8 +151,9 @@ export function NetWorthChart({ data }: { data: TrendPoint[] }) {
           fill="url(#netWorthFill)"
           activeDot={{ r: 4, strokeWidth: 0 }}
         />
-      </AreaChart>
-    </ChartContainer>
+        </AreaChart>
+      </ChartContainer>
+    </div>
   );
 }
 

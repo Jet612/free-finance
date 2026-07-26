@@ -28,9 +28,33 @@ The initial end-to-end implementation is complete:
 - [x] Step 1 — setup guide and environment contract
 - [x] Step 2 — PostgreSQL schema, RLS, indexes, and Drizzle migrations
 - [x] Step 3 — Plaid/Robinhood Python sync and GitHub Actions workflow
-- [x] Step 4 — authenticated Next.js dashboard, charts, theme, and setup status
+- [x] Step 4 — authenticated overview, detailed finance pages, charts, and theme
 
 The dashboard is intentionally empty until a provider completes its first sync.
+
+### Product tour
+
+The overview stays deliberately simple: net worth and its trend, grouped
+accounts, current-month cash flow, and recent activity. The navigation opens the
+deeper tools only when they are needed:
+
+- **Accounts** — balances, availability, connection health, and last sync time.
+- **Transactions** — searchable and filterable history with account, category,
+  pending status, and provider-supplied transaction time.
+- **Subscriptions** — estimated recurring charges detected privately from
+  merchant, amount consistency, and payment cadence.
+- **Budgets** — editable monthly category limits compared with actual spending.
+- **Investments** — portfolio allocation, equity totals, and individual
+  stock/crypto holdings.
+- **Reports** — six-month income, spending, cash-flow, and category trends.
+- **Connections** and **Security** — provider status, manual sync, passkeys, and
+  optional TOTP MFA.
+
+Subscription detection is a local heuristic, not a paid enrichment service, so
+it is intentionally labeled as an estimate. Plaid only supplies transaction
+times for some institutions and transaction types; when it returns only a
+posting date, Free Finance displays **Time unavailable** instead of inventing an
+ordering.
 
 ## Architecture
 
@@ -589,6 +613,15 @@ mode after Step 3, complete Bank of America's OAuth flow, replace the GitHub
 `PLAID_ACCESS_TOKEN` only if the helper says it changed, and manually rerun the
 workflow.
 
+### Transactions on the same date have no time
+
+Plaid's standard transaction object always includes a posting date, but its
+`datetime` and `authorized_datetime` fields are optional and institution
+dependent. New syncs preserve either timestamp when available. If Bank of
+America returns only the date, the dashboard shows **Time unavailable** and uses
+a stable fallback order rather than implying that one transaction happened
+before another.
+
 ### Supabase returns `401` or permission errors
 
 Confirm that `SUPABASE_SECRET_KEY` contains a server-side `sb_secret_...` key or
@@ -624,7 +657,7 @@ a quick verification.
 │   ├── app/                    # Next.js App Router pages and actions
 │   ├── components/             # shadcn/ui and dashboard components
 │   ├── db/                     # Drizzle schema and lazy database client
-│   └── lib/                    # Auth, dashboard queries, and formatting
+│   └── lib/                    # Auth, overview/detail queries, and formatting
 ├── drizzle/                    # Versioned PostgreSQL migrations
 ├── scripts/
 │   ├── plaid_link.py           # One-time local Plaid bootstrap

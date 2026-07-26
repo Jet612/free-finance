@@ -27,7 +27,6 @@ export function MetricCard({
 
   return (
     <Card className="relative overflow-hidden border-border/70 shadow-none">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/45 to-transparent" />
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
