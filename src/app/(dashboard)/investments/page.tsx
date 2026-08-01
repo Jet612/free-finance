@@ -5,6 +5,7 @@ import {
   HoldingsValueChart,
   InvestmentAllocationChart,
 } from "@/components/investment-charts";
+import { InvestmentHistoryChart } from "@/components/investment-history-chart";
 import { PageHeader } from "@/components/page-header";
 import { SummaryStrip } from "@/components/summary-strip";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,10 @@ export default async function InvestmentsPage() {
           {
             label: "Portfolio value",
             value: formatCurrency(data.metrics.value),
+            detail:
+              data.metrics.cashBalance > 0.005
+                ? `${formatCurrency(data.metrics.investedValue)} invested · ${formatCurrency(data.metrics.cashBalance)} cash`
+                : `${formatCurrency(data.metrics.investedValue)} invested`,
             icon: TrendingUp,
           },
           {
@@ -69,6 +74,18 @@ export default async function InvestmentsPage() {
           },
         ]}
       />
+
+      <Card className="shadow-none">
+        <CardHeader className="border-b">
+          <CardTitle>Portfolio history</CardTitle>
+          <CardDescription>
+            Daily investment account value from completed syncs
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <InvestmentHistoryChart data={data.history} />
+        </CardContent>
+      </Card>
 
       <div className="grid gap-5 xl:grid-cols-2">
         <Card className="shadow-none">
