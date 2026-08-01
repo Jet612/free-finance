@@ -229,6 +229,9 @@ repository with **Actions: Read and write** permission. Set
 `GITHUB_SYNC_REPOSITORY` to `owner/repository` and store the token in
 `GITHUB_SYNC_TOKEN`.
 
+The scheduled workflow runs every three hours. Manual requests from the
+dashboard have a 10-minute cooldown to avoid dispatching duplicate syncs.
+
 Keep all financial data variables scoped to Production unless you intentionally
 want Preview deployments to access them.
 

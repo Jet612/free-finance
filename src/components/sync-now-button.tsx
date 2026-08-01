@@ -19,18 +19,20 @@ function SubmitButton({ configured }: { configured: boolean }) {
   return (
     <Button
       type="submit"
-      variant="outline"
+      variant="link"
+      size="sm"
+      className="h-auto rounded-sm p-0 text-xs"
       disabled={!configured || pending}
       aria-describedby="sync-now-status"
     >
       {pending ? (
         <>
-          <LoaderCircle className="animate-spin" />
-          Queuing sync
+          <LoaderCircle className="size-3.5 animate-spin" />
+          Starting…
         </>
       ) : (
         <>
-          <RefreshCw />
+          <RefreshCw className="size-3.5" />
           Sync now
         </>
       )}
@@ -78,9 +80,7 @@ export function SyncNowButton({
     };
   }, [completed, failed, router, state.queuedAt, state.status]);
 
-  let message = configured
-    ? "Every 3 hours · 10-minute manual cooldown"
-    : "Add a GitHub sync token to enable";
+  let message = configured ? "" : "Add a GitHub sync token to enable";
   if (state.message) message = state.message;
   if (completed) message = "Sync complete. Dashboard data is current.";
   if (failed) message = "A provider failed. Check Connections for details.";
@@ -89,16 +89,20 @@ export function SyncNowButton({
   }
 
   return (
-    <div className="grid justify-items-start gap-1.5 sm:justify-items-end">
+    <div className="grid justify-items-start gap-1 sm:justify-items-end">
       <form action={action}>
         <SubmitButton configured={configured} />
       </form>
       <div
         id="sync-now-status"
         aria-live="polite"
-        className="flex min-h-4 items-center gap-1 text-[11px] text-muted-foreground"
+        className={
+          message || (state.runUrl && state.status === "queued")
+            ? "flex items-center gap-1 text-[11px] text-muted-foreground"
+            : "sr-only"
+        }
       >
-        <span>{message}</span>
+        <span>{message || "Ready to sync."}</span>
         {state.runUrl && state.status === "queued" && (
           <a
             href={state.runUrl}

@@ -26,11 +26,7 @@ export default async function InvestmentsPage() {
   const data = await getInvestmentsData();
   return (
     <div className="grid gap-7">
-      <PageHeader
-        eyebrow="Investments"
-        title="Every investment account, clearly separated"
-        description="A combined overview followed by the totals and performance of each account."
-      />
+      <PageHeader title="Investments" />
       <section className="grid gap-3" aria-labelledby="overview-heading">
         <div>
           <h2 id="overview-heading" className="text-sm font-semibold">

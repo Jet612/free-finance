@@ -61,6 +61,34 @@ export function formatDateTime(
   }).format(date);
 }
 
+export function formatRelativeTime(
+  value: Date | string | null,
+  now = new Date(),
+): string {
+  if (!value) return "never";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "at an unknown time";
+
+  const differenceMs = date.getTime() - now.getTime();
+  const absoluteMs = Math.abs(differenceMs);
+  if (absoluteMs < 60_000) return "just now";
+
+  const units = [
+    ["year", 365 * 24 * 60 * 60 * 1000],
+    ["month", 30 * 24 * 60 * 60 * 1000],
+    ["day", 24 * 60 * 60 * 1000],
+    ["hour", 60 * 60 * 1000],
+    ["minute", 60 * 1000],
+  ] as const;
+  const [unit, milliseconds] =
+    units.find(([, duration]) => absoluteMs >= duration) ?? units.at(-1)!;
+
+  return new Intl.RelativeTimeFormat("en", { numeric: "always" }).format(
+    Math.round(differenceMs / milliseconds),
+    unit,
+  );
+}
+
 export function formatTransactionDateTime(
   transactionAt: string | null,
   date: string,

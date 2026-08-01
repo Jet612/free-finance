@@ -14,11 +14,7 @@ export default async function TransactionsPage() {
   const data = await getTransactionsData();
   return (
     <div className="grid gap-7">
-      <PageHeader
-        eyebrow="Transactions"
-        title="Every dollar, in order"
-        description="Search and filter the latest 750 Plaid transactions. The list starts month to date."
-      />
+      <PageHeader title="Transactions" />
       <SummaryStrip
         items={[
           {

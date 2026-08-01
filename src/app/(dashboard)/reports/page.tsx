@@ -36,9 +36,7 @@ export default async function SpendingPage({
   return (
     <div className="grid gap-7">
       <PageHeader
-        eyebrow="Spending"
-        title="See where your money goes"
-        description="Compare income and spending, track net income, and see where your money goes."
+        title="Spending"
         action={
           <SpendingMonthSelect
             months={data.availableMonths}

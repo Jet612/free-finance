@@ -28,11 +28,7 @@ export default async function SubscriptionsPage() {
   const data = await getSubscriptionsData();
   return (
     <div className="grid gap-7">
-      <PageHeader
-        eyebrow="Subscriptions"
-        title="Recurring charges, surfaced"
-        description="A strict local heuristic shows only active, subscription-like charges with consistent amounts and renewal dates."
-      />
+      <PageHeader title="Subscriptions" />
       <SummaryStrip
         items={[
           {

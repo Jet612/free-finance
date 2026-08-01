@@ -9,9 +9,9 @@ import {
 } from "lucide-react";
 
 import { NetWorthChart } from "@/components/finance-charts";
+import { PageHeader } from "@/components/page-header";
 import { RecentTransactions } from "@/components/recent-transactions";
 import { SyncNowButton } from "@/components/sync-now-button";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -24,6 +24,7 @@ import {
   formatCurrency,
   formatDateTime,
   formatPercent,
+  formatRelativeTime,
   titleCase,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -101,44 +102,47 @@ export default async function DashboardPage() {
   const monthlyTotal =
     data.metrics.monthlyIncome + data.metrics.monthlySpending;
   const changePositive = (data.metrics.netWorthChange ?? 0) >= 0;
+  const lastSuccessfulSyncExact = data.lastSuccessfulSync
+    ? formatDateTime(data.lastSuccessfulSync)
+    : null;
 
   return (
     <div className="grid gap-7 lg:gap-9">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
-              Overview
-            </p>
+      <PageHeader
+        title="Overview"
+        action={
+          <div className="flex items-center gap-3 text-xs">
             {data.lastSuccessfulSync && (
-              <Badge variant="secondary" className="font-normal">
-                Synced {formatDateTime(data.lastSuccessfulSync)}
-              </Badge>
+              <time
+                dateTime={data.lastSuccessfulSync}
+                title={`Last synced ${lastSuccessfulSyncExact}`}
+                aria-label={`Last synced ${lastSuccessfulSyncExact}`}
+                className="cursor-help text-muted-foreground"
+              >
+                Synced {formatRelativeTime(data.lastSuccessfulSync)}
+              </time>
             )}
+            <SyncNowButton
+              configured={Boolean(
+                process.env.GITHUB_SYNC_TOKEN &&
+                  process.env.GITHUB_SYNC_REPOSITORY,
+              )}
+              completedSyncAt={data.completedSyncAt}
+              failedSyncAt={data.failedSyncAt}
+            />
           </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            A simple view of everything you own, owe, earn, and spend.
-          </p>
-        </div>
-        <SyncNowButton
-          configured={Boolean(
-            process.env.GITHUB_SYNC_TOKEN &&
-              process.env.GITHUB_SYNC_REPOSITORY,
-          )}
-          completedSyncAt={data.completedSyncAt}
-          failedSyncAt={data.failedSyncAt}
-        />
-      </header>
+        }
+      />
 
       <section aria-labelledby="net-worth-heading">
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
-            <h1
+            <h2
               id="net-worth-heading"
               className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground"
             >
               Net worth
-            </h1>
+            </h2>
             <p className="mt-3 font-mono text-[clamp(2.75rem,6vw,5.25rem)] font-medium leading-none tracking-[-0.065em] tabular-nums text-foreground">
               {formatCurrency(data.metrics.netWorth)}
             </p>
@@ -252,18 +256,23 @@ export default async function DashboardPage() {
               net
             </span>
           </p>
-          <div className="mt-4 flex h-3 overflow-hidden rounded-sm bg-muted">
-            <span
-              className="bg-emerald-600"
-              style={{
-                width: `${
-                  monthlyTotal
-                    ? (data.metrics.monthlyIncome / monthlyTotal) * 100
-                    : 0
-                }%`,
-              }}
-            />
-            <span className="flex-1 bg-amber-500" />
+          <div
+            className="mt-4 flex h-3 overflow-hidden rounded-sm bg-muted"
+            aria-label={`Income ${formatCurrency(data.metrics.monthlyIncome)}, spending ${formatCurrency(data.metrics.monthlySpending)}`}
+          >
+            {monthlyTotal > 0 ? (
+              <>
+                <span
+                  className="bg-emerald-600"
+                  style={{
+                    width: `${
+                      (data.metrics.monthlyIncome / monthlyTotal) * 100
+                    }%`,
+                  }}
+                />
+                <span className="flex-1 bg-amber-500" />
+              </>
+            ) : null}
           </div>
           <div className="mt-5 divide-y">
             <div className="flex items-center justify-between py-3">

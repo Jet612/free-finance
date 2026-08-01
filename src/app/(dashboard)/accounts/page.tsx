@@ -20,11 +20,7 @@ export default async function AccountsPage() {
   const data = await getAccountsData();
   return (
     <div className="grid gap-7">
-      <PageHeader
-        eyebrow="Accounts"
-        title="Everything in one ledger"
-        description="Current balances, available cash, connection health, and the source behind each account."
-      />
+      <PageHeader title="Accounts" />
       <SummaryStrip
         items={[
           {

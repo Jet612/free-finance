@@ -99,6 +99,7 @@ export async function getDashboardData(): Promise<DashboardData> {
           coalesce(abs(sum(amount) filter (where amount < 0)), 0)::float8 as spending
         from public.transactions
         where transaction_date >= ${monthStart}::date
+          and transaction_date < ${monthStart}::date + interval '1 month'
           and pending = false
           and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
       ),
@@ -124,7 +125,8 @@ export async function getDashboardData(): Promise<DashboardData> {
           coalesce(category_primary, 'Other') as category,
           abs(sum(amount))::float8 as value
         from public.transactions
-        where transaction_date >= current_date - interval '30 days'
+        where transaction_date >= ${monthStart}::date
+          and transaction_date < ${monthStart}::date + interval '1 month'
           and amount < 0
           and pending = false
           and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')

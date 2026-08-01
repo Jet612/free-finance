@@ -10,6 +10,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -95,18 +96,7 @@ export default async function SetupPage() {
 
   return (
     <div className="grid gap-6 lg:gap-8">
-      <header>
-        <span className="text-xs font-medium uppercase tracking-[0.16em] text-primary">
-          System
-        </span>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
-          Connections
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          Safe status only. Credentials live in local, GitHub, and Vercel
-          secret stores and are never returned to this page.
-        </p>
-      </header>
+      <PageHeader title="Connections" />
 
       <section className="grid gap-4 md:grid-cols-3">
         <Card className="border-border/70 shadow-none">

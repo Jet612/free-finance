@@ -22,11 +22,7 @@ export default async function BudgetsPage() {
   const data = await getBudgetsData();
   return (
     <div className="grid gap-7">
-      <PageHeader
-        eyebrow="Budgets"
-        title="Plan the month, category by category"
-        description="Set flexible monthly limits against the categories already coming from Plaid. Changes stay in your private Postgres database."
-      />
+      <PageHeader title="Budgets" />
       <SummaryStrip
         items={[
           {
