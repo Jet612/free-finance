@@ -17,11 +17,14 @@ from scripts.sync import (
     decimal,
     decode_robinhood_session,
     encode_plaid_cursor_state,
+    fetch_robinhood_accounts,
     parse_plaid_cursor_state,
     plaid_account_row,
     plaid_transaction_row,
+    robinhood_stock_rows,
     selected_sources,
     sync_plaid,
+    sync_robinhood,
 )
 
 
@@ -310,3 +313,248 @@ class SyncNormalizationTests(TestCase):
 
         with self.assertRaises(SyncError):
             decode_robinhood_session(encoded)
+
+    def test_robinhood_account_fetch_includes_every_account_kind(self) -> None:
+        with patch(
+            "scripts.sync.robinhood.request_get",
+            return_value=[{"account_number": "one"}],
+        ) as request_get:
+            profiles = fetch_robinhood_accounts()
+
+        self.assertEqual(profiles, [{"account_number": "one"}])
+        self.assertEqual(
+            request_get.call_args.args,
+            (
+                "https://api.robinhood.com/accounts/",
+                "pagination",
+                {
+                    "default_to_all_accounts": "true",
+                    "include_managed": "true",
+                    "include_multiple_individual": "true",
+                },
+            ),
+        )
+
+    def test_robinhood_stock_rows_use_position_owner_and_batch_quotes(
+        self,
+    ) -> None:
+        positions = [
+            {
+                "id": "position-one",
+                "instrument": "https://api.robinhood.com/instruments/one/",
+                "quantity": "2",
+                "average_buy_price": "10",
+            }
+        ]
+        instrument = {
+            "id": "instrument-one",
+            "symbol": "TEST",
+            "simple_name": "Test ETF",
+            "type": "etp",
+        }
+        quote = {
+            "symbol": "TEST",
+            "last_trade_price": "12.50",
+            "last_extended_hours_trade_price": None,
+        }
+
+        with (
+            patch(
+                "scripts.sync.robinhood.get_instrument_by_url",
+                return_value=instrument,
+            ),
+            patch(
+                "scripts.sync.robinhood.get_quotes",
+                return_value=[quote],
+            ) as get_quotes,
+        ):
+            rows = robinhood_stock_rows(
+                positions,
+                account_id=22,
+                synced_at="2026-08-01T00:00:00Z",
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["account_id"], 22)
+        self.assertEqual(rows[0]["external_id"], "stock:instrument-one")
+        self.assertEqual(rows[0]["current_value"], "25.00")
+        self.assertEqual(rows[0]["unrealized_gain"], "5.00")
+        get_quotes.assert_called_once_with(["TEST"])
+
+    def test_robinhood_sync_persists_self_directed_and_managed_accounts(
+        self,
+    ) -> None:
+        settings = Settings(
+            supabase_url="https://example.supabase.co",
+            supabase_secret_key="secret",
+            plaid_environment="production",
+            plaid_client_id="",
+            plaid_secret="",
+            plaid_access_tokens=(),
+            plaid_country_codes=("US",),
+            robinhood_session_b64="linked-session",
+        )
+        profiles = [
+            {
+                "account_number": "957458482",
+                "management_type": "self_directed",
+                "brokerage_account_type": "individual",
+                "state": "active",
+            },
+            {
+                "account_number": "181892628536",
+                "management_type": "managed",
+                "brokerage_account_type": "individual",
+                "state": "active",
+            },
+        ]
+        portfolios = {
+            "957458482": {
+                "equity": "100",
+                "extended_hours_equity": "0",
+                "market_value": "90",
+            },
+            "181892628536": {
+                "equity": "250",
+                "extended_hours_equity": "245",
+                "market_value": "240",
+            },
+        }
+        positions = {
+            "957458482": [{"id": "self-one"}],
+            "181892628536": [
+                {"id": "managed-one"},
+                {"id": "managed-two"},
+            ],
+        }
+
+        class RecordingStore:
+            dry_run = False
+
+            def __init__(self) -> None:
+                self.upserts: list[tuple[str, list[dict], str]] = []
+                self.cleanup_calls: list[tuple[int, list[str]]] = []
+
+            def upsert(
+                self,
+                table: str,
+                rows: list[dict],
+                on_conflict: str,
+            ) -> list[dict]:
+                self.upserts.append((table, rows, on_conflict))
+                if table == "accounts":
+                    return [
+                        {**row, "id": account_id}
+                        for row, account_id in zip(rows, (11, 22))
+                    ]
+                return rows
+
+            def existing_holding_ids(self, account_id: int) -> set[str]:
+                return {"stock:stale"}
+
+            def delete_holding_external_ids(
+                self,
+                account_id: int,
+                external_ids: list[str],
+            ) -> int:
+                self.cleanup_calls.append((account_id, external_ids))
+                return len(external_ids)
+
+        store = RecordingStore()
+
+        def stock_rows(
+            account_positions: list[dict],
+            account_id: int,
+            synced_at: str,
+        ) -> list[dict]:
+            return [
+                {
+                    "account_id": account_id,
+                    "external_id": f"stock:{position['id']}",
+                    "asset_type": "stock",
+                    "current_value": "12.50",
+                    "cost_basis": "10.00",
+                    "unrealized_gain": "2.50",
+                    "synced_at": synced_at,
+                }
+                for position in account_positions
+            ]
+
+        with (
+            patch("scripts.sync.activate_robinhood_session"),
+            patch("scripts.sync.clear_robinhood_session") as clear_session,
+            patch(
+                "scripts.sync.fetch_robinhood_accounts",
+                return_value=profiles,
+            ),
+            patch(
+                "scripts.sync.fetch_robinhood_positions",
+                side_effect=lambda number: positions[number],
+            ),
+            patch(
+                "scripts.sync.robinhood.load_portfolio_profile",
+                side_effect=lambda account_number: portfolios[account_number],
+            ),
+            patch(
+                "scripts.sync.robinhood.get_crypto_positions",
+                return_value=[],
+            ),
+            patch("scripts.sync.robinhood_stock_rows", side_effect=stock_rows),
+        ):
+            counts, details = sync_robinhood(settings, store)
+
+        account_rows = next(
+            rows for table, rows, _ in store.upserts if table == "accounts"
+        )
+        snapshot_rows = next(
+            rows
+            for table, rows, _ in store.upserts
+            if table == "balance_snapshots"
+        )
+        holding_rows = next(
+            rows for table, rows, _ in store.upserts if table == "holdings"
+        )
+        investment_snapshot_rows = next(
+            rows
+            for table, rows, _ in store.upserts
+            if table == "investment_snapshots"
+        )
+
+        self.assertEqual([row["name"] for row in account_rows], [
+            "Brokerage",
+            "Managed Individual",
+        ])
+        self.assertEqual([row["mask"] for row in account_rows], ["8482", "8536"])
+        self.assertEqual(
+            [row["current_balance"] for row in account_rows],
+            ["100", "245"],
+        )
+        self.assertEqual(
+            [row["account_id"] for row in snapshot_rows],
+            [11, 22],
+        )
+        self.assertEqual(
+            [row["account_id"] for row in holding_rows],
+            [11, 22, 22],
+        )
+        self.assertEqual(
+            [row["unrealized_gain"] for row in investment_snapshot_rows],
+            ["2.50", "5.00"],
+        )
+        self.assertEqual(store.cleanup_calls, [
+            (11, ["stock:stale"]),
+            (22, ["stock:stale"]),
+        ])
+        self.assertEqual(
+            counts,
+            {
+                "accounts": 2,
+                "snapshots": 2,
+                "investment_snapshots": 2,
+                "stock_holdings": 3,
+                "crypto_holdings": 0,
+                "holdings_removed": 2,
+            },
+        )
+        self.assertEqual(details["managed_accounts"], 1)
+        clear_session.assert_called_once_with()

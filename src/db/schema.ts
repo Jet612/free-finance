@@ -287,6 +287,41 @@ export const holdings = pgTable(
   ],
 );
 
+export const investmentSnapshots = pgTable(
+  "investment_snapshots",
+  {
+    id: bigint({ mode: "number" })
+      .primaryKey()
+      .generatedAlwaysAsIdentity(),
+    accountId: bigint("account_id", { mode: "number" })
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    snapshotDate: date("snapshot_date", { mode: "string" }).notNull(),
+    marketValue: numeric("market_value", {
+      precision: 19,
+      scale: 4,
+    }).notNull(),
+    costBasis: numeric("cost_basis", {
+      precision: 19,
+      scale: 4,
+    }).notNull(),
+    unrealizedGain: numeric("unrealized_gain", {
+      precision: 19,
+      scale: 4,
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("investment_snapshots_account_date_uidx").on(
+      table.accountId,
+      table.snapshotDate,
+    ),
+    index("investment_snapshots_date_idx").on(table.snapshotDate),
+  ],
+);
+
 export const syncStates = pgTable("sync_states", {
   source: text().primaryKey(),
   cursor: text(),

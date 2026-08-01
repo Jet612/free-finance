@@ -17,7 +17,6 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import type { InvestmentsData } from "@/lib/detail-data";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -46,8 +45,13 @@ const holdingsConfig = {
   },
 } satisfies ChartConfig;
 
-type Allocation = InvestmentsData["allocation"];
-type Holdings = InvestmentsData["holdings"];
+type Allocation = { type: string; value: number; percent: number }[];
+type Holdings = {
+  symbol: string;
+  currentValue: number;
+  unrealizedGain: number | null;
+  unrealizedGainPercent: number | null;
+}[];
 
 export function InvestmentAllocationChart({
   data,

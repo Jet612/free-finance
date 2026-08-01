@@ -17,7 +17,7 @@ export default async function TransactionsPage() {
       <PageHeader
         eyebrow="Transactions"
         title="Every dollar, in order"
-        description="Search and filter the latest 750 Plaid transactions. Bank-provided authorization times are shown when available."
+        description="Search and filter the latest 750 Plaid transactions. The list starts month to date."
       />
       <SummaryStrip
         items={[
@@ -51,6 +51,7 @@ export default async function TransactionsPage() {
           transactions={data.transactions}
           categories={data.categories}
           accounts={data.accounts}
+          periodStarts={data.periodStarts}
         />
       </Card>
     </div>

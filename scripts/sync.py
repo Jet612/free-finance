@@ -64,6 +64,8 @@ ROBINHOOD_SESSION_FIELDS = (
     "refresh_token",
     "device_token",
 )
+ROBINHOOD_ACCOUNTS_URL = "https://api.robinhood.com/accounts/"
+ROBINHOOD_POSITIONS_URL = "https://api.robinhood.com/positions/"
 
 
 class SyncError(RuntimeError):
@@ -288,6 +290,25 @@ class SyncStore:
             for row in (result.data or [])
             if row.get("external_id")
         }
+
+    def delete_holding_external_ids(
+        self, account_id: int, external_ids: Sequence[str]
+    ) -> int:
+        """Delete stale holdings without touching the same symbol elsewhere."""
+        if not external_ids or self.dry_run:
+            return 0
+        deleted = 0
+        for batch in chunks(external_ids):
+            result = (
+                self.client.table("holdings")
+                .delete()
+                .eq("account_id", account_id)
+                .in_("external_id", batch)
+                .execute()
+            )
+            if isinstance(result.data, list):
+                deleted += len(result.data)
+        return deleted
 
     def begin(self, source: str) -> int | None:
         if self.dry_run:
@@ -797,17 +818,136 @@ def clear_robinhood_session() -> None:
     robinhood_auth.update_session("Authorization", None)
 
 
+def fetch_robinhood_accounts() -> list[dict[str, Any]]:
+    """Return every brokerage account, including Strategies accounts."""
+    profiles = robinhood.request_get(
+        ROBINHOOD_ACCOUNTS_URL,
+        "pagination",
+        {
+            "default_to_all_accounts": "true",
+            "include_managed": "true",
+            "include_multiple_individual": "true",
+        },
+    )
+    if profiles in (None, [None]):
+        raise SyncError("Robinhood accounts were unavailable.")
+    return [profile for profile in profiles if isinstance(profile, dict)]
+
+
+def fetch_robinhood_positions(account_number: str) -> list[dict[str, Any]]:
+    positions = robinhood.request_get(
+        ROBINHOOD_POSITIONS_URL,
+        "pagination",
+        {
+            "account_number": account_number,
+            "include_managed": "true",
+            "nonzero": "true",
+        },
+    )
+    if positions in (None, [None]):
+        raise SyncError(
+            f"Robinhood positions were unavailable for account "
+            f"ending {account_number[-4:]}."
+        )
+    return [position for position in positions if isinstance(position, dict)]
+
+
+def robinhood_account_number(profile: dict[str, Any]) -> str:
+    account_number = str(
+        profile.get("account_number")
+        or profile.get("rhs_account_number")
+        or ""
+    )
+    if not account_number:
+        raise SyncError("Robinhood returned an account without an identifier.")
+    return account_number
+
+
+def robinhood_account_labels(
+    profile: dict[str, Any],
+) -> tuple[str, str, str]:
+    brokerage_type = str(
+        profile.get("brokerage_account_type") or "individual"
+    ).lower()
+    type_labels = {
+        "individual": "Individual",
+        "ira_roth": "Roth IRA",
+        "ira_traditional": "Traditional IRA",
+        "ira_sep": "SEP IRA",
+        "ira_simple": "SIMPLE IRA",
+        "joint_tenancy_with_ros": "Joint",
+        "joint_community_property": "Joint Community Property",
+        "custodial_ugma": "Custodial UGMA",
+        "custodial_utma": "Custodial UTMA",
+        "trust_revocable": "Revocable Trust",
+        "trust_irrevocable": "Irrevocable Trust",
+    }
+    type_label = type_labels.get(
+        brokerage_type,
+        brokerage_type.replace("_", " ").title(),
+    )
+    nickname = str(profile.get("nickname") or "").strip()
+    is_managed = profile.get("management_type") == "managed"
+    if is_managed:
+        name = nickname or f"Managed {type_label}"
+        return name, f"Robinhood Strategies {name}", "managed"
+    if brokerage_type == "individual":
+        return nickname or "Brokerage", "Robinhood Brokerage", "brokerage"
+    name = nickname or type_label
+    return name, f"Robinhood {name}", brokerage_type.replace("_", " ")
+
+
 def robinhood_stock_rows(
-    holdings: dict[str, dict[str, Any]], account_id: int, synced_at: str
+    positions: list[dict[str, Any]], account_id: int, synced_at: str
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for symbol, holding in holdings.items():
-        quantity = decimal(holding.get("quantity"))
+    enriched: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for position in positions:
+        quantity = decimal(position.get("quantity"))
         if quantity <= 0:
             continue
-        average_cost = decimal(holding.get("average_buy_price"))
-        current_price = decimal(holding.get("price"))
-        current_value = decimal(holding.get("equity"), quantity * current_price)
+        instrument_url = str(position.get("instrument") or "")
+        instrument = robinhood.get_instrument_by_url(instrument_url)
+        if not isinstance(instrument, dict) or not instrument.get("symbol"):
+            raise SyncError(
+                "Robinhood did not return instrument details for an open "
+                "position; existing holdings were preserved."
+            )
+        enriched.append((position, instrument))
+
+    symbols = [str(instrument["symbol"]).upper() for _, instrument in enriched]
+    quotes = robinhood.get_quotes(symbols) if symbols else []
+    if quotes in (None, [None]):
+        raise SyncError(
+            "Robinhood quotes were unavailable; existing holdings were "
+            "preserved."
+        )
+    quote_by_symbol = {
+        str(quote.get("symbol") or "").upper(): quote
+        for quote in quotes
+        if isinstance(quote, dict) and quote.get("symbol")
+    }
+
+    rows: list[dict[str, Any]] = []
+    for position, instrument in enriched:
+        symbol = str(instrument["symbol"]).upper()
+        quote = quote_by_symbol.get(symbol)
+        if not quote:
+            raise SyncError(
+                f"Robinhood did not return a current quote for {symbol}; "
+                "existing holdings were preserved."
+            )
+        quantity = decimal(position.get("quantity"))
+        average_cost = decimal(position.get("average_buy_price"))
+        current_price = decimal(
+            quote.get("last_extended_hours_trade_price")
+            or quote.get("last_trade_price")
+        )
+        if current_price <= 0:
+            raise SyncError(
+                f"Robinhood returned an invalid current quote for {symbol}; "
+                "existing holdings were preserved."
+            )
+        current_value = quantity * current_price
         cost_basis = quantity * average_cost
         gain = current_value - cost_basis
         gain_percent = (
@@ -815,13 +955,20 @@ def robinhood_stock_rows(
             if cost_basis
             else Decimal("0")
         )
+        holding_external_id = (
+            instrument.get("id") or position.get("id") or symbol
+        )
         rows.append(
             {
                 "account_id": account_id,
-                "external_id": f"stock:{holding.get('id') or symbol}",
+                "external_id": f"stock:{holding_external_id}",
                 "symbol": symbol.upper(),
-                "name": holding.get("name") or symbol.upper(),
-                "asset_type": holding.get("type") or "stock",
+                "name": (
+                    instrument.get("simple_name")
+                    or instrument.get("name")
+                    or symbol
+                ),
+                "asset_type": instrument.get("type") or "stock",
                 "quantity": decimal_string(quantity),
                 "average_cost": decimal_string(average_cost),
                 "current_price": decimal_string(current_price),
@@ -829,7 +976,13 @@ def robinhood_stock_rows(
                 "cost_basis": decimal_string(cost_basis),
                 "unrealized_gain": decimal_string(gain),
                 "unrealized_gain_percent": decimal_string(gain_percent),
-                "raw_data": jsonable(holding),
+                "raw_data": jsonable(
+                    {
+                        "position": position,
+                        "instrument": instrument,
+                        "quote": quote,
+                    }
+                ),
                 "synced_at": synced_at,
                 "updated_at": synced_at,
             }
@@ -900,122 +1053,293 @@ def sync_robinhood(
     try:
         # Interactive SMS/app approval happens only in robinhood_link.py.
         activate_robinhood_session(settings.robinhood_session_b64)
-        account_profile = robinhood.load_account_profile()
-        portfolio = robinhood.load_portfolio_profile()
-        if not account_profile or not portfolio:
+        account_profiles = fetch_robinhood_accounts()
+        if not account_profiles:
             raise SyncError(
                 "The Robinhood session expired or was revoked. Re-run "
                 "`python scripts/robinhood_link.py --github` locally and "
                 "approve the new login."
             )
 
-        stock_holdings = robinhood.build_holdings() or {}
-        stock_market_value = decimal(portfolio.get("market_value"))
-        if stock_market_value > Decimal("0.01") and not stock_holdings:
-            raise SyncError(
-                "Robinhood reported invested value but returned no stock "
-                "positions; existing holdings were preserved."
-            )
         crypto_positions = robinhood.get_crypto_positions()
         if crypto_positions is None:
             raise SyncError(
                 "Robinhood crypto positions were unavailable; existing "
                 "holdings were preserved."
             )
+        crypto_profile = (
+            robinhood.load_crypto_profile() if crypto_positions else {}
+        ) or {}
 
-        account_number = str(
-            account_profile.get("account_number")
-            or account_profile.get("rhs_account_number")
-            or "unknown"
-        )
-        external_hash = hashlib.sha256(account_number.encode()).hexdigest()[:24]
-        stock_equity = max(
-            decimal(portfolio.get("equity")),
-            decimal(portfolio.get("extended_hours_equity")),
-        )
-
-        placeholder_id = 1
         crypto_preview = robinhood_crypto_rows(
-            list(crypto_positions), placeholder_id, synced_at
+            list(crypto_positions), 0, synced_at
         )
         crypto_value = sum(
             (decimal(row["current_value"]) for row in crypto_preview),
             Decimal("0"),
         )
-        account_row = {
-            "source": "robinhood",
-            "external_id": f"robinhood:{external_hash}",
-            "institution_name": "Robinhood",
-            "name": "Brokerage",
-            "official_name": "Robinhood Brokerage",
-            "account_type": "investment",
-            "account_subtype": "brokerage",
-            "mask": account_number[-4:] if len(account_number) >= 4 else None,
-            "currency_code": "USD",
-            "current_balance": decimal_string(stock_equity + crypto_value),
-            "available_balance": decimal_string(
-                account_profile.get("cash_available_for_withdrawal")
-                or account_profile.get("portfolio_cash")
-            ),
-            "connected": True,
-            "last_synced_at": synced_at,
-            "metadata": {
-                "stock_equity": decimal_string(stock_equity),
-                "crypto_value": decimal_string(crypto_value),
-            },
-            "updated_at": synced_at,
-        }
+
+        crypto_account_number = str(
+            crypto_profile.get("rhs_account_number")
+            or crypto_profile.get("apex_account_number")
+            or ""
+        )
+        crypto_target_number = ""
+        for profile in account_profiles:
+            profile_numbers = {
+                str(profile.get("account_number") or ""),
+                str(profile.get("rhs_account_number") or ""),
+            }
+            if crypto_account_number and crypto_account_number in profile_numbers:
+                crypto_target_number = robinhood_account_number(profile)
+                break
+        if crypto_positions and not crypto_target_number:
+            self_directed = next(
+                (
+                    profile
+                    for profile in account_profiles
+                    if profile.get("management_type") != "managed"
+                ),
+                None,
+            )
+            if not self_directed:
+                raise SyncError(
+                    "Robinhood crypto could not be matched to a brokerage "
+                    "account; existing holdings were preserved."
+                )
+            crypto_target_number = robinhood_account_number(self_directed)
+
+        prepared: list[dict[str, Any]] = []
+        for placeholder_id, account_profile in enumerate(
+            account_profiles,
+            start=1,
+        ):
+            account_number = robinhood_account_number(account_profile)
+            portfolio = robinhood.load_portfolio_profile(
+                account_number=account_number
+            )
+            if not isinstance(portfolio, dict):
+                raise SyncError(
+                    f"Robinhood portfolio data was unavailable for account "
+                    f"ending {account_number[-4:]}."
+                )
+            positions = fetch_robinhood_positions(account_number)
+            stock_market_value = decimal(portfolio.get("market_value"))
+            if stock_market_value > Decimal("0.01") and not positions:
+                raise SyncError(
+                    f"Robinhood reported invested value for account ending "
+                    f"{account_number[-4:]} but returned no stock positions; "
+                    "existing holdings were preserved."
+                )
+
+            stock_rows = robinhood_stock_rows(
+                positions,
+                placeholder_id,
+                synced_at,
+            )
+            crypto_rows = (
+                [
+                    {**row, "account_id": placeholder_id}
+                    for row in crypto_preview
+                ]
+                if account_number == crypto_target_number
+                else []
+            )
+            regular_equity = decimal(portfolio.get("equity"))
+            extended_equity = decimal(portfolio.get("extended_hours_equity"))
+            stock_equity = (
+                extended_equity
+                if extended_equity > Decimal("0")
+                else regular_equity
+            )
+            account_crypto_value = (
+                crypto_value
+                if account_number == crypto_target_number
+                else Decimal("0")
+            )
+            external_hash = hashlib.sha256(
+                account_number.encode()
+            ).hexdigest()[:24]
+            name, official_name, subtype = robinhood_account_labels(
+                account_profile
+            )
+            connected = not any(
+                (
+                    account_profile.get("deactivated"),
+                    account_profile.get("permanently_deactivated"),
+                    account_profile.get("state") not in (None, "active"),
+                )
+            )
+            account_row = {
+                "source": "robinhood",
+                "external_id": f"robinhood:{external_hash}",
+                "institution_name": "Robinhood",
+                "name": name,
+                "official_name": official_name,
+                "account_type": "investment",
+                "account_subtype": subtype,
+                "mask": (
+                    account_number[-4:] if len(account_number) >= 4 else None
+                ),
+                "currency_code": "USD",
+                "current_balance": decimal_string(
+                    stock_equity + account_crypto_value
+                ),
+                "available_balance": decimal_string(
+                    account_profile.get("cash_available_for_withdrawal")
+                    or account_profile.get("portfolio_cash")
+                ),
+                "connected": connected,
+                "last_synced_at": synced_at,
+                "metadata": {
+                    "stock_equity": decimal_string(stock_equity),
+                    "crypto_value": decimal_string(account_crypto_value),
+                    "management_type": account_profile.get("management_type"),
+                    "brokerage_account_type": account_profile.get(
+                        "brokerage_account_type"
+                    ),
+                },
+                "updated_at": synced_at,
+            }
+            prepared.append(
+                {
+                    "placeholder_id": placeholder_id,
+                    "account_row": account_row,
+                    "holding_rows": [*stock_rows, *crypto_rows],
+                }
+            )
 
         if store.dry_run:
-            account_id = placeholder_id
+            account_ids = {
+                record["account_row"]["external_id"]: record["placeholder_id"]
+                for record in prepared
+            }
         else:
             persisted = store.upsert(
-                "accounts", [account_row], "source,external_id"
+                "accounts",
+                [record["account_row"] for record in prepared],
+                "source,external_id",
             )
-            if not persisted:
-                raise SyncError("Supabase did not return the Robinhood account.")
-            account_id = int(persisted[0]["id"])
+            account_ids = {
+                str(row["external_id"]): int(row["id"])
+                for row in persisted
+                if row.get("external_id") and row.get("id") is not None
+            }
+            expected_ids = {
+                record["account_row"]["external_id"] for record in prepared
+            }
+            if set(account_ids) != expected_ids:
+                raise SyncError(
+                    "Supabase did not return every Robinhood account."
+                )
 
-        stock_rows = robinhood_stock_rows(
-            stock_holdings, account_id, synced_at
-        )
-        crypto_rows = [
-            {**row, "account_id": account_id} for row in crypto_preview
-        ]
-        holding_rows = [*stock_rows, *crypto_rows]
+        snapshot_rows: list[dict[str, Any]] = []
+        investment_snapshot_rows: list[dict[str, Any]] = []
+        holding_rows: list[dict[str, Any]] = []
+        holdings_by_account: dict[int, list[dict[str, Any]]] = {}
+        for record in prepared:
+            account_row = record["account_row"]
+            account_id = account_ids[account_row["external_id"]]
+            snapshot_rows.append(
+                {
+                    "account_id": account_id,
+                    "snapshot_date": today_string(),
+                    "balance": account_row["current_balance"],
+                    "available_balance": account_row["available_balance"],
+                }
+            )
+            account_holdings = [
+                {**row, "account_id": account_id}
+                for row in record["holding_rows"]
+            ]
+            holding_rows.extend(account_holdings)
+            holdings_by_account[account_id] = account_holdings
+            investment_snapshot_rows.append(
+                {
+                    "account_id": account_id,
+                    "snapshot_date": today_string(),
+                    "market_value": decimal_string(
+                        sum(
+                            (
+                                decimal(row.get("current_value"))
+                                for row in account_holdings
+                            ),
+                            Decimal("0"),
+                        )
+                    ),
+                    "cost_basis": decimal_string(
+                        sum(
+                            (
+                                decimal(row.get("cost_basis"))
+                                for row in account_holdings
+                            ),
+                            Decimal("0"),
+                        )
+                    ),
+                    "unrealized_gain": decimal_string(
+                        sum(
+                            (
+                                decimal(row.get("unrealized_gain"))
+                                for row in account_holdings
+                            ),
+                            Decimal("0"),
+                        )
+                    ),
+                }
+            )
 
+        removed = 0
         if not store.dry_run:
             store.upsert(
                 "balance_snapshots",
-                [
-                    {
-                        "account_id": account_id,
-                        "snapshot_date": today_string(),
-                        "balance": account_row["current_balance"],
-                        "available_balance": account_row["available_balance"],
-                    }
-                ],
+                snapshot_rows,
                 "account_id,snapshot_date",
             )
             store.upsert(
                 "holdings", holding_rows, "account_id,external_id"
             )
-            incoming_ids = {row["external_id"] for row in holding_rows}
-            stale_ids = sorted(
-                store.existing_holding_ids(account_id) - incoming_ids
+            store.upsert(
+                "investment_snapshots",
+                investment_snapshot_rows,
+                "account_id,snapshot_date",
             )
-            removed = store.delete_external_ids("holdings", stale_ids)
-        else:
-            removed = 0
+            for account_id, account_holdings in holdings_by_account.items():
+                incoming_ids = {
+                    row["external_id"] for row in account_holdings
+                }
+                stale_ids = sorted(
+                    store.existing_holding_ids(account_id) - incoming_ids
+                )
+                removed += store.delete_holding_external_ids(
+                    account_id,
+                    stale_ids,
+                )
 
+        managed_accounts = sum(
+            1
+            for profile in account_profiles
+            if profile.get("management_type") == "managed"
+        )
         counts = {
-            "accounts": 1,
-            "snapshots": 1,
-            "stock_holdings": len(stock_rows),
-            "crypto_holdings": len(crypto_rows),
+            "accounts": len(prepared),
+            "snapshots": len(snapshot_rows),
+            "investment_snapshots": len(investment_snapshot_rows),
+            "stock_holdings": sum(
+                1
+                for row in holding_rows
+                if row["asset_type"] != "crypto"
+            ),
+            "crypto_holdings": sum(
+                1
+                for row in holding_rows
+                if row["asset_type"] == "crypto"
+            ),
             "holdings_removed": removed,
         }
-        return counts, {"institution": "Robinhood"}
+        return counts, {
+            "institution": "Robinhood",
+            "managed_accounts": managed_accounts,
+        }
     finally:
         # logout() would revoke the token needed by tomorrow's Actions runner.
         clear_robinhood_session()

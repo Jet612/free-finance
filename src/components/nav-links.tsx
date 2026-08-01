@@ -21,12 +21,12 @@ const groups = [
     label: "Money",
     links: [
       { href: "/", label: "Overview", icon: LayoutDashboard },
-      { href: "/accounts", label: "Accounts", icon: Landmark },
+      { href: "/reports", label: "Spending", icon: ChartNoAxesCombined },
+      { href: "/investments", label: "Investments", icon: TrendingUp },
       { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
       { href: "/subscriptions", label: "Subscriptions", icon: Repeat2 },
       { href: "/budgets", label: "Budgets", icon: PiggyBank },
-      { href: "/investments", label: "Investments", icon: TrendingUp },
-      { href: "/reports", label: "Reports", icon: ChartNoAxesCombined },
+      { href: "/accounts", label: "Accounts", icon: Landmark },
     ],
   },
   {

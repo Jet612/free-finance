@@ -1,7 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
   ChartConfig,
@@ -15,8 +22,8 @@ import { cn } from "@/lib/utils";
 
 const chartConfig = {
   value: {
-    label: "Portfolio value",
-    color: "var(--chart-1)",
+    label: "Gain/loss",
+    color: "var(--chart-2)",
   },
 } satisfies ChartConfig;
 
@@ -50,11 +57,11 @@ export function InvestmentHistoryChart({
       <div className="flex h-[300px] items-center justify-center rounded-xl border border-dashed bg-muted/20 px-8 text-center">
         <div>
           <p className="text-sm font-medium">
-            Your history starts after the first sync
+            Unrealized gain/loss history starts after the next sync
           </p>
           <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-            Daily investment account snapshots will build a portfolio trend
-            here.
+            Each investment sync records the exact total market value and cost
+            basis for this graph.
           </p>
         </div>
       </div>
@@ -66,7 +73,7 @@ export function InvestmentHistoryChart({
       <div className="mb-3 flex justify-end">
         <div
           className="inline-flex rounded-lg border bg-background p-0.5"
-          aria-label="Portfolio history time range"
+          aria-label="Investment gains and losses time range"
         >
           {(["1M", "3M", "1Y"] as const).map((option) => (
             <button
@@ -89,32 +96,13 @@ export function InvestmentHistoryChart({
         config={chartConfig}
         className="h-[300px] w-full aspect-auto sm:h-[360px]"
       >
-        <AreaChart
+        <LineChart
           data={visibleData}
           margin={{ left: 4, right: 12, top: 12 }}
           accessibilityLayer
         >
-          <defs>
-            <linearGradient
-              id="investmentHistoryFill"
-              x1="0"
-              y1="0"
-              x2="0"
-              y2="1"
-            >
-              <stop
-                offset="5%"
-                stopColor="var(--color-value)"
-                stopOpacity={0.3}
-              />
-              <stop
-                offset="95%"
-                stopColor="var(--color-value)"
-                stopOpacity={0}
-              />
-            </linearGradient>
-          </defs>
           <CartesianGrid vertical={false} strokeDasharray="4 4" />
+          <ReferenceLine y={0} stroke="var(--border)" />
           <XAxis
             dataKey="date"
             tickLine={false}
@@ -129,16 +117,23 @@ export function InvestmentHistoryChart({
             tickFormatter={formatCompactCurrency}
           />
           <ChartTooltip
-            cursor={false}
+            cursor={{ stroke: "var(--border)", strokeDasharray: "4 4" }}
             content={
               <ChartTooltipContent
                 labelFormatter={(label) => shortDate(String(label))}
                 formatter={(value) => (
                   <div className="flex min-w-40 items-center justify-between gap-4">
                     <span className="text-muted-foreground">
-                      Portfolio value
+                      {Number(value) >= 0 ? "Gain" : "Loss"}
                     </span>
-                    <span className="font-mono font-medium tabular-nums">
+                    <span
+                      className={cn(
+                        "font-mono font-medium tabular-nums",
+                        Number(value) >= 0
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-red-600 dark:text-red-400",
+                      )}
+                    >
                       {formatCurrency(Number(value))}
                     </span>
                   </div>
@@ -146,15 +141,15 @@ export function InvestmentHistoryChart({
               />
             }
           />
-          <Area
-            type="monotone"
+          <Line
             dataKey="value"
+            type="linear"
             stroke="var(--color-value)"
-            strokeWidth={2.25}
-            fill="url(#investmentHistoryFill)"
-            activeDot={{ r: 4, strokeWidth: 0 }}
+            strokeWidth={2.5}
+            dot={{ r: 3, fill: "var(--color-value)" }}
+            activeDot={{ r: 5 }}
           />
-        </AreaChart>
+        </LineChart>
       </ChartContainer>
     </div>
   );

@@ -5,7 +5,8 @@ personal finance dashboard—you own the app and your data.
 
 Free Finance brings bank accounts, transactions, budgets, subscriptions, reports,
 and investments into one private dashboard. It connects to financial institutions
-through Plaid and can optionally show a Robinhood portfolio.
+through Plaid and can optionally show all Robinhood brokerage and managed
+accounts.
 
 ## Get started
 
@@ -236,7 +237,8 @@ want Preview deployments to access them.
 ### Robinhood
 
 Robinhood support uses the unofficial `robin_stocks` library and can stop working
-if Robinhood changes its private API. It reads portfolio and holding data only.
+if Robinhood changes its private API. It reads portfolio and holding data only,
+including separate self-directed and Robinhood Strategies managed accounts.
 
 Add your credentials to `.env.local`, then run:
 

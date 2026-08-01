@@ -4,7 +4,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Legend,
   XAxis,
   YAxis,
 } from "recharts";
@@ -12,10 +11,12 @@ import {
 import {
   ChartConfig,
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import type { ReportsData } from "@/lib/detail-data";
+import type { SpendingData } from "@/lib/detail-data";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -24,13 +25,18 @@ import {
 
 const config = {
   income: { label: "Income", color: "var(--chart-1)" },
-  spending: { label: "Spending", color: "var(--chart-3)" },
+  spending: { label: "Spending", color: "var(--chart-4)" },
 } satisfies ChartConfig;
 
-export function CashFlowReportChart({
+const cashFlowLabels = {
+  income: "Income",
+  spending: "Spending",
+} as const;
+
+export function MonthlyCashFlowChart({
   data,
 }: {
-  data: ReportsData["monthly"];
+  data: SpendingData["monthly"];
 }) {
   return (
     <ChartContainer config={config} className="h-[330px] w-full aspect-auto">
@@ -56,7 +62,8 @@ export function CashFlowReportChart({
               formatter={(value, name) => (
                 <div className="flex min-w-36 justify-between gap-4">
                   <span className="text-muted-foreground">
-                    {name === "income" ? "Income" : "Spending"}
+                    {cashFlowLabels[name as keyof typeof cashFlowLabels] ??
+                      String(name)}
                   </span>
                   <span className="font-mono tabular-nums">
                     {formatCurrency(Number(value))}
@@ -66,19 +73,19 @@ export function CashFlowReportChart({
             />
           }
         />
-        <Legend />
         <Bar
           dataKey="income"
           fill="var(--color-income)"
           radius={[4, 4, 0, 0]}
-          maxBarSize={34}
+          maxBarSize={26}
         />
         <Bar
           dataKey="spending"
           fill="var(--color-spending)"
           radius={[4, 4, 0, 0]}
-          maxBarSize={34}
+          maxBarSize={26}
         />
+        <ChartLegend content={<ChartLegendContent />} />
       </BarChart>
     </ChartContainer>
   );

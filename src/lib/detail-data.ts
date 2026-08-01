@@ -41,6 +41,26 @@ function monthStartInAppTimezone(): string {
   return `${year}-${month}-01`;
 }
 
+function todayInAppTimezone(): string {
+  const timeZone = process.env.APP_TIMEZONE ?? "America/New_York";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone,
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function subtractDays(date: string, days: number): string {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() - days);
+  return shifted.toISOString().slice(0, 10);
+}
+
 export type TransactionRow = {
   id: number;
   externalId: string;
@@ -76,6 +96,12 @@ export type TransactionsData = {
   transactions: TransactionRow[];
   categories: string[];
   accounts: string[];
+  periodStarts: {
+    mtd: string;
+    last30Days: string;
+    last90Days: string;
+    ytd: string;
+  };
   metrics: {
     income: number;
     spending: number;
@@ -88,6 +114,7 @@ export async function getTransactionsData(): Promise<TransactionsData> {
   await requireSession();
   const db = getDb();
   const monthStart = monthStartInAppTimezone();
+  const today = todayInAppTimezone();
   const timeZone = process.env.APP_TIMEZONE ?? "America/New_York";
 
   const result = await db.execute(sql`
@@ -231,6 +258,12 @@ export async function getTransactionsData(): Promise<TransactionsData> {
     accounts: Array.from(
       new Set(transactions.map((item) => item.accountName)),
     ).sort(),
+    periodStarts: {
+      mtd: monthStart,
+      last30Days: subtractDays(today, 29),
+      last90Days: subtractDays(today, 89),
+      ytd: `${today.slice(0, 4)}-01-01`,
+    },
     metrics: {
       income: numberValue(row?.income),
       spending: numberValue(row?.spending),
@@ -528,138 +561,102 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
   };
 }
 
-export type HoldingRow = {
+export type InvestmentAccountSummary = {
   id: number;
-  symbol: string;
   name: string;
-  assetType: string;
-  quantity: number;
-  averageCost: number | null;
-  currentPrice: number | null;
-  currentValue: number;
-  costBasis: number | null;
-  unrealizedGain: number | null;
-  unrealizedGainPercent: number | null;
-  accountName: string;
-  syncedAt: string;
+  officialName: string | null;
+  institutionName: string;
+  mask: string | null;
+  value: number;
+  costBasis: number;
+  gain: number;
+  gainPercent: number | null;
 };
 
 export type InvestmentsData = {
-  holdings: HoldingRow[];
-  allocation: { type: string; value: number; percent: number }[];
+  accounts: InvestmentAccountSummary[];
   history: { date: string; value: number }[];
   metrics: {
     value: number;
-    investedValue: number;
-    cashBalance: number;
     costBasis: number;
     gain: number;
     gainPercent: number | null;
-    positions: number;
+    accounts: number;
   };
 };
 
 export async function getInvestmentsData(): Promise<InvestmentsData> {
   await requireSession();
   const db = getDb();
-  const [holdingsResult, historyResult, portfolioResult] = await Promise.all([
+  const [accountsResult, historyResult] = await Promise.all([
     db.execute(sql`
       select
-        h.id,
-        h.symbol,
-        h.name,
-        h.asset_type,
-        h.quantity::float8 as quantity,
-        h.average_cost::float8 as average_cost,
-        h.current_price::float8 as current_price,
-        h.current_value::float8 as current_value,
-        h.cost_basis::float8 as cost_basis,
-        h.unrealized_gain::float8 as unrealized_gain,
-        h.unrealized_gain_percent::float8 as unrealized_gain_percent,
-        h.synced_at::text,
-        a.name as account_name
-      from public.holdings h
-      join public.accounts a on a.id = h.account_id
-      order by h.current_value desc, h.symbol
+        a.id,
+        a.name,
+        a.official_name,
+        a.institution_name,
+        a.mask,
+        a.current_balance::float8 as value,
+        coalesce(sum(h.cost_basis), 0)::float8 as cost_basis,
+        coalesce(sum(h.unrealized_gain), 0)::float8 as gain
+      from public.accounts a
+      left join public.holdings h on h.account_id = a.id
+      where a.connected = true
+        and (a.account_type = 'investment' or a.source = 'robinhood')
+      group by a.id
+      order by a.current_balance desc, a.name
     `),
     db.execute(sql`
       select
-        bs.snapshot_date::text as date,
-        sum(bs.balance)::float8 as value
-      from public.balance_snapshots bs
-      join public.accounts a on a.id = bs.account_id
-      where bs.snapshot_date >= current_date - interval '365 days'
+        snapshots.snapshot_date::text as date,
+        sum(snapshots.unrealized_gain)::float8 as value
+      from public.investment_snapshots snapshots
+      join public.accounts a on a.id = snapshots.account_id
+      where snapshots.snapshot_date >= current_date - interval '365 days'
         and a.connected = true
         and (a.account_type = 'investment' or a.source = 'robinhood')
-      group by bs.snapshot_date
-      order by bs.snapshot_date
-    `),
-    db.execute(sql`
-      select coalesce(sum(current_balance), 0)::float8 as value
-      from public.accounts
-      where connected = true
-        and (account_type = 'investment' or source = 'robinhood')
+      group by snapshots.snapshot_date
+      order by snapshots.snapshot_date
     `),
   ]);
-  const holdings = (holdingsResult as Row[]).map((item) => ({
-    id: numberValue(item.id),
-    symbol: stringValue(item.symbol),
-    name: stringValue(item.name),
-    assetType: stringValue(item.asset_type),
-    quantity: numberValue(item.quantity),
-    averageCost:
-      item.average_cost == null ? null : numberValue(item.average_cost),
-    currentPrice:
-      item.current_price == null ? null : numberValue(item.current_price),
-    currentValue: numberValue(item.current_value),
-    costBasis: item.cost_basis == null ? null : numberValue(item.cost_basis),
-    unrealizedGain:
-      item.unrealized_gain == null ? null : numberValue(item.unrealized_gain),
-    unrealizedGainPercent:
-      item.unrealized_gain_percent == null
-        ? null
-        : numberValue(item.unrealized_gain_percent),
-    accountName: stringValue(item.account_name),
-    syncedAt: stringValue(item.synced_at),
-  }));
-  const investedValue = holdings.reduce(
-    (sum, item) => sum + item.currentValue,
+  const accounts = (accountsResult as Row[]).map((item) => {
+    const costBasis = numberValue(item.cost_basis);
+    const gain = numberValue(item.gain);
+    return {
+      id: numberValue(item.id),
+      name: stringValue(item.name),
+      officialName: item.official_name
+        ? stringValue(item.official_name)
+        : null,
+      institutionName: stringValue(item.institution_name),
+      mask: item.mask ? stringValue(item.mask) : null,
+      value: numberValue(item.value),
+      costBasis,
+      gain,
+      gainPercent: costBasis ? (gain / costBasis) * 100 : null,
+    };
+  });
+  const value = accounts.reduce((sum, account) => sum + account.value, 0);
+  const costBasis = accounts.reduce(
+    (sum, account) => sum + account.costBasis,
     0,
   );
-  const portfolioValue = numberValue((portfolioResult as Row[])[0]?.value);
-  const costBasis = holdings.reduce(
-    (sum, item) => sum + (item.costBasis ?? 0),
-    0,
-  );
-  const allocationMap = new Map<string, number>();
-  for (const holding of holdings) {
-    allocationMap.set(
-      holding.assetType,
-      (allocationMap.get(holding.assetType) ?? 0) + holding.currentValue,
-    );
-  }
+  const gain = accounts.reduce((sum, account) => sum + account.gain, 0);
 
   return {
-    holdings,
+    accounts,
     history: (historyResult as Row[]).map((item) => ({
       date: stringValue(item.date),
       value: numberValue(item.value),
     })),
-    allocation: Array.from(allocationMap, ([type, allocationValue]) => ({
-      type,
-      value: allocationValue,
-      percent: investedValue ? (allocationValue / investedValue) * 100 : 0,
-    })).sort((a, b) => b.value - a.value),
     metrics: {
-      value: portfolioValue,
-      investedValue,
-      cashBalance: portfolioValue - investedValue,
+      value,
       costBasis,
-      gain: investedValue - costBasis,
+      gain,
       gainPercent: costBasis
-        ? ((investedValue - costBasis) / costBasis) * 100
+        ? (gain / costBasis) * 100
         : null,
-      positions: holdings.length,
+      accounts: accounts.length,
     },
   };
 }
@@ -749,7 +746,9 @@ export async function getBudgetsData(): Promise<BudgetsData> {
   };
 }
 
-export type ReportsData = {
+export type SpendingData = {
+  selectedMonth: string;
+  availableMonths: string[];
   monthly: {
     month: string;
     income: number;
@@ -758,32 +757,57 @@ export type ReportsData = {
   }[];
   categories: { category: string; value: number }[];
   metrics: {
-    averageIncome: number;
-    averageSpending: number;
-    averageNet: number;
-    savingsRate: number | null;
+    income: number;
+    spending: number;
+    net: number;
+    topCategory: { category: string; value: number } | null;
   };
 };
 
-export async function getReportsData(): Promise<ReportsData> {
+function spendingMonthStart(value?: string): string {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(value ?? "")
+    ? `${value}-01`
+    : monthStartInAppTimezone();
+}
+
+export async function getSpendingData(
+  requestedMonth?: string,
+): Promise<SpendingData> {
   await requireSession();
   const db = getDb();
+  const currentMonth = monthStartInAppTimezone();
+  const requestedMonthStart = spendingMonthStart(requestedMonth);
   const result = await db.execute(sql`
-    with months as (
+    with bounds as (
+      select least(
+        coalesce(date_trunc('month', min(transaction_date))::date, ${currentMonth}::date),
+        ${currentMonth}::date
+      ) as first_month
+      from public.transactions
+    ),
+    selection as (
+      select least(
+        ${currentMonth}::date,
+        greatest(first_month, ${requestedMonthStart}::date)
+      ) as month
+      from bounds
+    ),
+    months as (
       select generate_series(
-        date_trunc('month', current_date) - interval '5 months',
-        date_trunc('month', current_date),
+        selection.month - interval '5 months',
+        selection.month,
         interval '1 month'
       )::date as month
+      from selection
     ),
     monthly_rows as (
       select
         date_trunc('month', transaction_date)::date as month,
         coalesce(sum(amount) filter (where amount > 0), 0)::float8 as income,
-        coalesce(abs(sum(amount) filter (where amount < 0)), 0)::float8 as spending,
-        coalesce(sum(amount), 0)::float8 as net
-      from public.transactions
-      where transaction_date >= date_trunc('month', current_date) - interval '5 months'
+        coalesce(abs(sum(amount) filter (where amount < 0)), 0)::float8 as spending
+      from public.transactions, selection
+      where transaction_date >= selection.month - interval '5 months'
+        and transaction_date < selection.month + interval '1 month'
         and pending = false
         and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
       group by date_trunc('month', transaction_date)::date
@@ -793,20 +817,35 @@ export async function getReportsData(): Promise<ReportsData> {
         jsonb_agg(jsonb_build_object(
           'month', months.month::text,
           'income', coalesce(monthly_rows.income, 0),
-          'spending', coalesce(monthly_rows.spending, 0),
-          'net', coalesce(monthly_rows.net, 0)
+          'spending', coalesce(monthly_rows.spending, 0)
         ) order by months.month),
         '[]'::jsonb
       ) as data
       from months
       left join monthly_rows using (month)
     ),
+    available_month_rows as (
+      select generate_series(
+        bounds.first_month,
+        ${currentMonth}::date,
+        interval '1 month'
+      )::date as month
+      from bounds
+    ),
+    available_month_data as (
+      select coalesce(
+        jsonb_agg(month::text order by month desc),
+        '[]'::jsonb
+      ) as data
+      from available_month_rows
+    ),
     category_rows as (
       select
         coalesce(category_primary, 'OTHER') as category,
         abs(sum(amount))::float8 as value
-      from public.transactions
-      where transaction_date >= current_date - interval '90 days'
+      from public.transactions, selection
+      where transaction_date >= selection.month
+        and transaction_date < selection.month + interval '1 month'
         and amount < 0
         and pending = false
         and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
@@ -824,38 +863,49 @@ export async function getReportsData(): Promise<ReportsData> {
       ) as data
       from category_rows
     )
-    select monthly_data.data as monthly, category_data.data as categories
-    from monthly_data, category_data
+    select
+      monthly_data.data as monthly,
+      category_data.data as categories,
+      available_month_data.data as available_months,
+      selection.month::text as selected_month
+    from monthly_data, category_data, available_month_data, selection
   `);
 
   const row = result[0] as Row | undefined;
   const monthly = (Array.isArray(row?.monthly) ? (row.monthly as Row[]) : []).map(
-    (item) => ({
-      month: stringValue(item.month),
-      income: numberValue(item.income),
-      spending: numberValue(item.spending),
-      net: numberValue(item.net),
-    }),
+    (item) => {
+      const income = numberValue(item.income);
+      const spending = numberValue(item.spending);
+      return {
+        month: stringValue(item.month),
+        income,
+        spending,
+        net: income - spending,
+      };
+    },
   );
-  const divisor = monthly.length || 1;
-  const totalIncome = monthly.reduce((sum, item) => sum + item.income, 0);
-  const totalSpending = monthly.reduce((sum, item) => sum + item.spending, 0);
+  const categories = (
+    Array.isArray(row?.categories) ? (row.categories as Row[]) : []
+  ).map((item) => ({
+    category: stringValue(item.category),
+    value: numberValue(item.value),
+  }));
+  const selectedMetrics = monthly.at(-1);
 
   return {
+    selectedMonth: stringValue(row?.selected_month),
+    availableMonths: (
+      Array.isArray(row?.available_months)
+        ? (row.available_months as unknown[])
+        : []
+    ).map(stringValue),
     monthly,
-    categories: (
-      Array.isArray(row?.categories) ? (row.categories as Row[]) : []
-    ).map((item) => ({
-      category: stringValue(item.category),
-      value: numberValue(item.value),
-    })),
+    categories,
     metrics: {
-      averageIncome: totalIncome / divisor,
-      averageSpending: totalSpending / divisor,
-      averageNet: (totalIncome - totalSpending) / divisor,
-      savingsRate: totalIncome
-        ? ((totalIncome - totalSpending) / totalIncome) * 100
-        : null,
+      income: selectedMetrics?.income ?? 0,
+      spending: selectedMetrics?.spending ?? 0,
+      net: selectedMetrics?.net ?? 0,
+      topCategory: categories.at(0) ?? null,
     },
   };
 }

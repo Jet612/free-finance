@@ -4,11 +4,29 @@ import Image from "next/image";
 import { type ReactNode, useMemo, useState } from "react";
 import {
   ArrowDownLeft,
-  ArrowUpRight,
+  ArrowRightLeft,
+  Banknote,
+  BriefcaseBusiness,
+  CarFront,
+  CircleDollarSign,
+  Clapperboard,
+  Coffee,
   ExternalLink,
+  Fuel,
   Globe2,
+  HandHeart,
+  HeartPulse,
+  House,
+  Plane,
+  ReceiptText,
   Search,
+  Scissors,
+  ShoppingBag,
+  ShoppingBasket,
   SlidersHorizontal,
+  Tag,
+  Utensils,
+  Wrench,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -40,7 +58,6 @@ import type { TransactionRow } from "@/lib/detail-data";
 import { websiteHostname } from "@/lib/external-url";
 import {
   formatCurrency,
-  formatDateTime,
   formatTransactionDateTime,
   titleCase,
 } from "@/lib/format";
@@ -50,12 +67,22 @@ export function TransactionsTable({
   transactions,
   categories,
   accounts,
+  periodStarts,
 }: {
   transactions: TransactionRow[];
   categories: string[];
   accounts: string[];
+  periodStarts: {
+    mtd: string;
+    last30Days: string;
+    last90Days: string;
+    ytd: string;
+  };
 }) {
   const [search, setSearch] = useState("");
+  const [period, setPeriod] = useState<
+    "mtd" | "last30Days" | "last90Days" | "ytd" | "all"
+  >("mtd");
   const [category, setCategory] = useState("all");
   const [account, setAccount] = useState("all");
   const [status, setStatus] = useState("all");
@@ -64,6 +91,7 @@ export function TransactionsTable({
 
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
+    const periodStart = period === "all" ? null : periodStarts[period];
     return transactions.filter((transaction) => {
       const matchesSearch =
         !query ||
@@ -80,19 +108,22 @@ export function TransactionsTable({
       const matchesStatus =
         status === "all" ||
         (status === "pending" ? transaction.pending : !transaction.pending);
+      const matchesPeriod =
+        periodStart === null || transaction.date >= periodStart;
       return (
         matchesSearch &&
+        matchesPeriod &&
         matchesCategory &&
         matchesAccount &&
         matchesStatus
       );
     });
-  }, [account, category, search, status, transactions]);
+  }, [account, category, period, periodStarts, search, status, transactions]);
 
   return (
     <div>
-      <div className="grid gap-3 border-b p-4 lg:grid-cols-[minmax(240px,1fr)_repeat(3,minmax(140px,0.35fr))]">
-        <label className="relative">
+      <div className="grid gap-3 border-b p-4 sm:grid-cols-2 xl:grid-cols-[minmax(240px,1fr)_repeat(4,minmax(130px,0.35fr))]">
+        <label className="relative sm:col-span-2 xl:col-span-1">
           <span className="sr-only">Search transactions</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -102,6 +133,26 @@ export function TransactionsTable({
             className="pl-9"
           />
         </label>
+        <FilterSelect
+          label="Period"
+          value={period}
+          onChange={(value) =>
+            setPeriod(
+              value as
+                | "mtd"
+                | "last30Days"
+                | "last90Days"
+                | "ytd"
+                | "all",
+            )
+          }
+          options={[
+            { value: "mtd", label: "Month to date" },
+            { value: "last30Days", label: "Last 30 days" },
+            { value: "last90Days", label: "Last 90 days" },
+            { value: "ytd", label: "Year to date" },
+          ]}
+        />
         <FilterSelect
           label="Category"
           value={category}
@@ -142,7 +193,7 @@ export function TransactionsTable({
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableHead className="pl-4">Date & time</TableHead>
+            <TableHead className="pl-4">Date</TableHead>
             <TableHead>Description</TableHead>
             <TableHead className="hidden md:table-cell">Account</TableHead>
             <TableHead className="hidden lg:table-cell">Category</TableHead>
@@ -169,9 +220,6 @@ export function TransactionsTable({
               >
                 <TableCell className="pl-4 align-top">
                   <p className="text-xs font-medium">{occurred.date}</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {occurred.time ?? "Time unavailable"}
-                  </p>
                 </TableCell>
                 <TableCell>
                   <button
@@ -191,6 +239,8 @@ export function TransactionsTable({
                       key={transaction.logoUrl ?? transaction.id}
                       src={transaction.logoUrl}
                       incoming={incoming}
+                      category={transaction.category}
+                      categoryDetailed={transaction.categoryDetailed}
                     />
                     <div className="min-w-0">
                       <p className="max-w-[260px] truncate text-sm font-medium">
@@ -305,14 +355,17 @@ function FilterSelect({
 function MerchantLogo({
   src,
   incoming,
+  category,
+  categoryDetailed,
   large = false,
 }: {
   src: string | null;
   incoming: boolean;
+  category: string | null;
+  categoryDetailed: string | null;
   large?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
-  const Icon = incoming ? ArrowDownLeft : ArrowUpRight;
   const pixels = large ? 48 : 32;
 
   return (
@@ -337,10 +390,82 @@ function MerchantLogo({
           onError={() => setFailed(true)}
         />
       ) : (
-        <Icon className={large ? "size-5" : "size-3.5"} aria-hidden="true" />
+        <CategoryFallbackIcon
+          category={category}
+          categoryDetailed={categoryDetailed}
+          incoming={incoming}
+          large={large}
+        />
       )}
     </span>
   );
+}
+
+function CategoryFallbackIcon({
+  category,
+  categoryDetailed,
+  incoming,
+  large,
+}: {
+  category: string | null;
+  categoryDetailed: string | null;
+  incoming: boolean;
+  large: boolean;
+}) {
+  const className = large ? "size-5" : "size-3.5";
+
+  if (categoryDetailed?.includes("COFFEE")) {
+    return <Coffee className={className} aria-hidden="true" />;
+  }
+  if (categoryDetailed?.includes("GROCERIES")) {
+    return <ShoppingBasket className={className} aria-hidden="true" />;
+  }
+  if (
+    categoryDetailed?.includes("GAS") ||
+    categoryDetailed?.includes("FUEL")
+  ) {
+    return <Fuel className={className} aria-hidden="true" />;
+  }
+
+  switch (category) {
+    case "INCOME":
+      return <Banknote className={className} aria-hidden="true" />;
+    case "TRANSFER_IN":
+    case "TRANSFER_OUT":
+      return <ArrowRightLeft className={className} aria-hidden="true" />;
+    case "LOAN_PAYMENTS":
+      return <CircleDollarSign className={className} aria-hidden="true" />;
+    case "BANK_FEES":
+      return <ReceiptText className={className} aria-hidden="true" />;
+    case "ENTERTAINMENT":
+      return <Clapperboard className={className} aria-hidden="true" />;
+    case "FOOD_AND_DRINK":
+      return <Utensils className={className} aria-hidden="true" />;
+    case "GENERAL_MERCHANDISE":
+      return <ShoppingBag className={className} aria-hidden="true" />;
+    case "HOME_IMPROVEMENT":
+      return <Wrench className={className} aria-hidden="true" />;
+    case "MEDICAL":
+      return <HeartPulse className={className} aria-hidden="true" />;
+    case "PERSONAL_CARE":
+      return <Scissors className={className} aria-hidden="true" />;
+    case "GENERAL_SERVICES":
+      return <BriefcaseBusiness className={className} aria-hidden="true" />;
+    case "GOVERNMENT_AND_NON_PROFIT":
+      return <HandHeart className={className} aria-hidden="true" />;
+    case "TRANSPORTATION":
+      return <CarFront className={className} aria-hidden="true" />;
+    case "TRAVEL":
+      return <Plane className={className} aria-hidden="true" />;
+    case "RENT_AND_UTILITIES":
+      return <House className={className} aria-hidden="true" />;
+    default:
+      return incoming ? (
+        <ArrowDownLeft className={className} aria-hidden="true" />
+      ) : (
+        <Tag className={className} aria-hidden="true" />
+      );
+  }
 }
 
 function TransactionDetails({ transaction }: { transaction: TransactionRow }) {
@@ -371,13 +496,14 @@ function TransactionDetails({ transaction }: { transaction: TransactionRow }) {
             key={transaction.logoUrl ?? transaction.id}
             src={transaction.logoUrl}
             incoming={incoming}
+            category={transaction.category}
+            categoryDetailed={transaction.categoryDetailed}
             large
           />
           <div className="min-w-0 flex-1">
             <SheetTitle className="truncate text-lg">{merchant}</SheetTitle>
             <SheetDescription className="mt-1">
               {occurred.date}
-              {occurred.time ? ` at ${occurred.time}` : " · Time unavailable"}
             </SheetDescription>
           </div>
         </div>
@@ -428,7 +554,7 @@ function TransactionDetails({ transaction }: { transaction: TransactionRow }) {
             label="Authorization"
             value={
               transaction.transactionAt
-                ? `${occurred.date} at ${occurred.time}`
+                ? occurred.date
                 : authorized ?? "Not provided"
             }
           />
@@ -501,7 +627,12 @@ function TransactionDetails({ transaction }: { transaction: TransactionRow }) {
           />
           <DetailRow
             label="Last updated"
-            value={formatDateTime(transaction.updatedAt)}
+            value={
+              formatTransactionDateTime(
+                transaction.updatedAt,
+                transaction.date,
+              ).date
+            }
           />
           <DetailRow
             label="Transaction reference"

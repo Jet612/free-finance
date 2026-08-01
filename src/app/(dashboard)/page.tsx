@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CreditCard,
   Landmark,
+  PiggyBank,
   TrendingUp,
 } from "lucide-react";
 
@@ -39,43 +40,59 @@ type AccountGroup = {
   tone: string;
 };
 
+const accountGroupDefinitions = [
+  {
+    label: "Checking",
+    icon: Landmark,
+    tone: "bg-primary text-primary-foreground",
+  },
+  {
+    label: "Savings",
+    icon: PiggyBank,
+    tone: "bg-cyan-700 text-white",
+  },
+  {
+    label: "Credit Cards",
+    icon: CreditCard,
+    tone: "bg-amber-500 text-white",
+  },
+  {
+    label: "Investments",
+    icon: TrendingUp,
+    tone: "bg-emerald-700 text-white",
+  },
+] as const;
+
 function groupAccounts(accounts: AccountRow[]): AccountGroup[] {
-  const groups = new Map<string, AccountGroup>();
+  const groups = new Map(
+    accountGroupDefinitions.map((group) => [
+      group.label,
+      { ...group, count: 0, balance: 0 },
+    ]),
+  );
   for (const account of accounts) {
     const type = account.type.toLowerCase();
     const source = account.source.toLowerCase();
-    const group =
-      source === "robinhood" || type.includes("brokerage")
-        ? {
-            label: "Investments",
-            icon: TrendingUp,
-            tone: "bg-emerald-700 text-white",
-          }
-        : type.includes("credit")
-          ? {
-              label: "Credit cards",
-              icon: CreditCard,
-              tone: "bg-amber-500 text-white",
-            }
-          : type.includes("loan")
-            ? {
-                label: "Loans",
-                icon: Landmark,
-                tone: "bg-orange-500 text-white",
-              }
-            : {
-                label: "Cash & banking",
-                icon: Landmark,
-                tone: "bg-primary text-primary-foreground",
-              };
-    const current = groups.get(group.label);
-    groups.set(group.label, {
-      ...group,
-      count: (current?.count ?? 0) + 1,
-      balance: (current?.balance ?? 0) + account.balance,
+    const label =
+      source === "robinhood" ||
+      ["brokerage", "investment", "managed", "ira"].some((value) =>
+        type.includes(value),
+      )
+        ? "Investments"
+        : type.includes("savings")
+          ? "Savings"
+          : type.includes("credit") || type.includes("loan")
+            ? "Credit Cards"
+            : "Checking";
+    const current = groups.get(label);
+    if (!current) continue;
+    groups.set(label, {
+      ...current,
+      count: current.count + 1,
+      balance: current.balance + account.balance,
     });
   }
-  return Array.from(groups.values()).sort((a, b) => b.balance - a.balance);
+  return Array.from(groups.values()).filter((group) => group.count > 0);
 }
 
 export default async function DashboardPage() {
@@ -226,7 +243,7 @@ export default async function DashboardPage() {
               href="/reports"
               className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
             >
-              Reports <ArrowRight className="size-3" />
+              Spending <ArrowRight className="size-3" />
             </Link>
           </div>
           <p className="font-mono text-2xl font-medium tracking-tight tabular-nums">
