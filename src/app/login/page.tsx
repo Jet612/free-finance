@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { Database, Fingerprint, LockKeyhole } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { Brand } from "@/components/brand";
 import { LoginForm } from "@/components/login-form";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { hasSession } from "@/lib/auth";
 
@@ -65,9 +67,18 @@ export default async function LoginPage() {
           </CardHeader>
           <CardContent>
             <LoginForm />
+            <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
+              <span className="h-px flex-1 bg-border" />
+              Curious?
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <Button asChild variant="secondary" size="lg" className="w-full">
+              <Link href="/demo">
+                Explore the interactive demo
+              </Link>
+            </Button>
             <p className="mt-5 text-center text-[11px] leading-5 text-muted-foreground">
-              Registration is closed. An owner creates the single account in
-              Supabase.
+              The demo uses sample data and never connects to a bank.
             </p>
           </CardContent>
         </Card>

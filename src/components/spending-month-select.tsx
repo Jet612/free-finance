@@ -19,9 +19,11 @@ import { formatMonth } from "@/lib/format";
 export function SpendingMonthSelect({
   months,
   selectedMonth,
+  basePath = "/reports",
 }: {
   months: string[];
   selectedMonth: string;
+  basePath?: string;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -46,7 +48,7 @@ export function SpendingMonthSelect({
     if (!month || isPending) return;
     startTransition(() => {
       router.push(
-        `/reports?month=${encodeURIComponent(month.slice(0, 7))}`,
+        `${basePath}?month=${encodeURIComponent(month.slice(0, 7))}`,
         { scroll: false },
       );
     });

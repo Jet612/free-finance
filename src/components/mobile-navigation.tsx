@@ -14,7 +14,13 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-export function MobileNavigation({ name }: { name: string }) {
+export function MobileNavigation({
+  name,
+  basePath = "",
+}: {
+  name: string;
+  basePath?: string;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -35,7 +41,10 @@ export function MobileNavigation({ name }: { name: string }) {
           <Brand name={name} />
         </SheetHeader>
         <div className="px-3">
-          <NavLinks onNavigate={() => setOpen(false)} />
+          <NavLinks
+            basePath={basePath}
+            onNavigate={() => setOpen(false)}
+          />
         </div>
       </SheetContent>
     </Sheet>

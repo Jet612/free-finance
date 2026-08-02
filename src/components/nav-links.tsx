@@ -38,7 +38,13 @@ const groups = [
   },
 ];
 
-export function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+export function NavLinks({
+  onNavigate,
+  basePath = "",
+}: {
+  onNavigate?: () => void;
+  basePath?: string;
+}) {
   const pathname = usePathname();
 
   return (
@@ -50,14 +56,15 @@ export function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
           </p>
           <div className="grid gap-1">
             {group.links.map((link) => {
+              const href = `${basePath}${link.href === "/" ? "" : link.href}` || "/";
               const active =
-                link.href === "/"
-                  ? pathname === "/"
-                  : pathname.startsWith(link.href);
+                href === "/" || href === "/demo"
+                  ? pathname === href
+                  : pathname.startsWith(href);
               return (
                 <Link
                   key={link.href}
-                  href={link.href}
+                  href={href}
                   onClick={onNavigate}
                   className={cn(
                     "flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground",
