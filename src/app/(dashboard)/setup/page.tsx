@@ -93,6 +93,14 @@ export default async function SetupPage() {
   const completed =
     1 + data.sources.filter((source) => source.status === "connected").length;
   const progress = Math.round((completed / 3) * 100);
+  const robinhoodNeedsRelink = data.sources.some(
+    (source) =>
+      source.source === "robinhood" &&
+      source.status === "needs-attention" &&
+      (source.lastError?.toLowerCase().includes("accounts were unavailable") ||
+        source.lastError?.toLowerCase().includes("session expired") ||
+        source.lastError?.toLowerCase().includes("session was revoked")),
+  );
 
   return (
     <div className="grid gap-6 lg:gap-8">
@@ -164,11 +172,33 @@ export default async function SetupPage() {
         <Alert variant="destructive">
           <TriangleAlert />
           <AlertTitle>A provider needs attention</AlertTitle>
-          <AlertDescription>
-            {data.sources
-              .filter((source) => source.status === "needs-attention")
-              .map((source) => `${source.label}: ${source.lastError}`)
-              .join(" · ")}
+          <AlertDescription className="grid gap-3 text-balance">
+            <p>
+              {data.sources
+                .filter((source) => source.status === "needs-attention")
+                .map((source) => `${source.label}: ${source.lastError}`)
+                .join(" · ")}
+            </p>
+            {robinhoodNeedsRelink && (
+              <div className="grid gap-2">
+                <p>
+                  The Robinhood session may have expired. From the project
+                  directory, renew it and approve the newest login request in
+                  the Robinhood app:
+                </p>
+                <pre className="overflow-x-auto rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 font-mono text-xs text-foreground">
+                  <code className="select-all">
+                    .venv/bin/python scripts/robinhood_link.py --github
+                  </code>
+                </pre>
+                <p>Then verify the renewed session:</p>
+                <pre className="overflow-x-auto rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 font-mono text-xs text-foreground">
+                  <code className="select-all">
+                    .venv/bin/python scripts/sync.py --source robinhood --dry-run
+                  </code>
+                </pre>
+              </div>
+            )}
           </AlertDescription>
         </Alert>
       )}
