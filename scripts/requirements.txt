@@ -1,5 +1,5 @@
 # Pinned versions keep the unattended job reproducible across GitHub runners.
-plaid-python==40.1.0
+plaid-python==42.0.0
 supabase==2.31.0
 robin-stocks==3.4.0
 python-dotenv==1.2.2
