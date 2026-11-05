@@ -35,6 +35,9 @@ const SOURCE = "plaid";
 /** A run can't outlive its function, so anything older than this crashed. */
 const STALE_LOCK_MINUTES = 10;
 
+/** Long enough for a payment to clear across a weekend or a bank holiday. */
+const CARD_PAYMENT_MATCH_DAYS = 5;
+
 export type SyncTrigger = "scheduled" | "manual";
 
 export type SyncOutcome =
@@ -223,6 +226,30 @@ async function syncItem(
       from public.merchant_rules rules
       where coalesce(t.merchant_name, t.name) = rules.merchant
         and t.category_locked = false
+    `);
+    // The paying bank often can't tell a card from a loan, so Plaid may file a
+    // card payment as a generic loan payment, which would count as spending. The
+    // card receiving the same amount proves what it was. This checks all history
+    // because the two sides can arrive on different days, or from different banks.
+    await tx.execute(sql`
+      update public.transactions payment
+      set
+        category_detailed = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT',
+        updated_at = now()
+      where payment.amount < 0
+        and payment.category_primary = 'LOAN_PAYMENTS'
+        and payment.category_detailed is distinct from 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+        and payment.category_locked = false
+        and exists (
+          select 1
+          from public.transactions received
+          join public.accounts card on card.id = received.account_id
+          where card.account_type = 'credit'
+            and received.account_id <> payment.account_id
+            and received.amount = -payment.amount
+            and abs(received.transaction_date - payment.transaction_date)
+              <= ${CARD_PAYMENT_MATCH_DAYS}
+        )
     `);
 
     let holdingCount = 0;

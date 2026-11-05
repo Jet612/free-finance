@@ -387,6 +387,192 @@ describe("sync engine", { skip: !databaseUrl }, () => {
     assert.notEqual(other?.categoryPrimary, "TRAVEL");
   });
 
+  describe("credit card payments the bank files as loan payments", () => {
+    const CARD_PAYMENT = "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT";
+    const OTHER_PAYMENT = "LOAN_PAYMENTS_OTHER_PAYMENT";
+
+    const creditCard = (id: string) =>
+      account(id, { type: "credit", subtype: "credit card" });
+
+    /** Money leaving checking, as Plaid labels it when it can't see a card. */
+    function loanPayment(id: string, accountId: string, amount: number, date: string) {
+      return {
+        ...plaidTransaction(id, accountId, amount),
+        date,
+        personal_finance_category: {
+          primary: "LOAN_PAYMENTS",
+          detailed: OTHER_PAYMENT,
+        },
+      };
+    }
+
+    /** The same money arriving on the card, which Plaid calls a transfer. */
+    function cardReceipt(id: string, accountId: string, amount: number, date: string) {
+      return {
+        ...plaidTransaction(id, accountId, -amount),
+        date,
+        personal_finance_category: {
+          primary: "TRANSFER_IN",
+          detailed: "TRANSFER_IN_DEPOSIT",
+        },
+      };
+    }
+
+    async function detailedCategory(externalId: string) {
+      const rows = await db.select().from(schema.transactions);
+      return rows.find((row) => row.externalId === externalId)?.categoryDetailed;
+    }
+
+    test("recognizes one the card received, even if the card posted first", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), creditCard("card")],
+        pages: [
+          {
+            added: [
+              loanPayment("paid", "checking", 1214.08, "2026-09-24"),
+              cardReceipt("received", "card", 1214.08, "2026-09-22"),
+            ],
+          },
+        ],
+      });
+      await engine.runSync("manual");
+
+      assert.equal(await detailedCategory("paid"), CARD_PAYMENT);
+      // The card's side is already left out as a transfer, so it stays as it was.
+      assert.equal(await detailedCategory("received"), "TRANSFER_IN_DEPOSIT");
+    });
+
+    test("recognizes one whose card is at a different bank", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking")],
+        pages: [{ added: [loanPayment("paid", "checking", 50, "2026-10-22")] }],
+      });
+      await connect("item-2", "token-2", {
+        accounts: [creditCard("card")],
+        pages: [{ added: [cardReceipt("received", "card", 50, "2026-10-22")] }],
+      });
+      await engine.runSync("manual");
+
+      assert.equal(await detailedCategory("paid"), CARD_PAYMENT);
+    });
+
+    test("recognizes one when the card's side arrives on a later sync", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), creditCard("card")],
+        pages: [{ added: [loanPayment("paid", "checking", 50, "2026-10-22")] }],
+      });
+      await engine.runSync("manual");
+      assert.equal(await detailedCategory("paid"), OTHER_PAYMENT);
+
+      fakeItems.get("token-1")!.pages = [
+        {},
+        { added: [cardReceipt("received", "card", 50, "2026-10-23")] },
+      ];
+      await engine.runSync("manual");
+      assert.equal(await detailedCategory("paid"), CARD_PAYMENT);
+    });
+
+    test("keeps the label when the bank resends the payment", async () => {
+      const paid = loanPayment("paid", "checking", 50, "2026-10-22");
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), creditCard("card")],
+        pages: [
+          { added: [paid, cardReceipt("received", "card", 50, "2026-10-22")] },
+        ],
+      });
+      await engine.runSync("manual");
+      assert.equal(await detailedCategory("paid"), CARD_PAYMENT);
+
+      // A resend carries Plaid's label again, which overwrites the corrected one.
+      fakeItems.get("token-1")!.pages = [{}, { modified: [paid] }];
+      await engine.runSync("manual");
+      assert.equal(await detailedCategory("paid"), CARD_PAYMENT);
+    });
+
+    test("leaves a real loan payment alone", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), creditCard("card")],
+        pages: [
+          {
+            added: [
+              loanPayment("car-loan", "checking", 300, "2026-10-22"),
+              // Close, but not the same amount.
+              cardReceipt("different-amount", "card", 299.99, "2026-10-22"),
+              // The same amount, but too far apart to be the same money.
+              cardReceipt("too-late", "card", 300, "2026-10-28"),
+            ],
+          },
+        ],
+      });
+      await engine.runSync("manual");
+
+      assert.equal(await detailedCategory("car-loan"), OTHER_PAYMENT);
+    });
+
+    test("needs the money to land on a credit card", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), account("savings")],
+        pages: [
+          {
+            added: [
+              loanPayment("paid", "checking", 50, "2026-10-22"),
+              cardReceipt("received", "savings", 50, "2026-10-22"),
+            ],
+          },
+        ],
+      });
+      await engine.runSync("manual");
+
+      assert.equal(await detailedCategory("paid"), OTHER_PAYMENT);
+    });
+
+    test("doesn't touch a purchase that matches a card refund", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), creditCard("card")],
+        pages: [
+          {
+            added: [
+              {
+                ...plaidTransaction("purchase", "checking", 50),
+                date: "2026-10-22",
+                personal_finance_category: {
+                  primary: "GENERAL_MERCHANDISE",
+                  detailed: "GENERAL_MERCHANDISE_SUPERSTORES",
+                },
+              },
+              cardReceipt("refund", "card", 50, "2026-10-22"),
+            ],
+          },
+        ],
+      });
+      await engine.runSync("manual");
+
+      assert.equal(
+        await detailedCategory("purchase"),
+        "GENERAL_MERCHANDISE_SUPERSTORES",
+      );
+    });
+
+    test("respects a category the owner picked", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("checking"), creditCard("card")],
+        pages: [{ added: [loanPayment("paid", "checking", 50, "2026-10-22")] }],
+      });
+      await engine.runSync("manual");
+      await db.execute(drizzleSql`
+        update public.transactions set category_locked = true
+      `);
+
+      fakeItems.get("token-1")!.pages = [
+        {},
+        { added: [cardReceipt("received", "card", 50, "2026-10-22")] },
+      ];
+      await engine.runSync("manual");
+
+      assert.equal(await detailedCategory("paid"), OTHER_PAYMENT);
+    });
+  });
+
   test("runs at most once a day on schedule, but a person can still refresh", async () => {
     await connect("item-1", "token-1", { accounts: [account("a1")] });
 
