@@ -5,13 +5,24 @@ import { sql } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { setupIssues, type SetupIssue } from "@/lib/app-config";
 import { requireSession } from "@/lib/auth";
-import { getSubscriptionsData } from "@/lib/detail-data";
+import {
+  summarizeDashboard,
+  type DashboardSummary,
+} from "@/lib/dashboard-summary";
+import {
+  getBudgetsData,
+  getSubscriptionsData,
+  type BudgetRow,
+} from "@/lib/detail-data";
+import { safePlaidLogoUrl } from "@/lib/external-url";
 import {
   COUNTS_AS_CASH_FLOW,
   INCOME_TOTAL,
   IS_INCOME,
+  netWorthTrendCtes,
   SPENDING_TOTAL,
 } from "@/lib/finance-sql";
+import type { MonthlyFlow } from "@/lib/insights";
 import {
   appTimeZone,
   monthStartInAppTimezone,
@@ -42,6 +53,14 @@ export type AccountRow = {
   availableBalance?: number | null;
   connected: boolean;
   lastSyncedAt: string | null;
+  /** Its bank connection is broken, so this balance may be old. */
+  outOfDate?: boolean;
+  /** False when the owner has left this account out of their totals. */
+  inNetWorth?: boolean;
+  /** Recent daily balances, oldest first. Only on the accounts page. */
+  history?: TrendPoint[];
+  /** The change over the past 30 days, when there's that much history. */
+  change30Days?: number | null;
 };
 
 export type RecentTransaction = {
@@ -51,15 +70,21 @@ export type RecentTransaction = {
   name: string;
   merchantName: string | null;
   category: string | null;
+  categoryDetailed: string | null;
   amount: number;
   accountName: string;
   pending: boolean;
+  logoUrl: string | null;
 };
 
 export type UpcomingBill = {
   merchant: string;
   amount: number;
   expectedAt: string;
+  category: string | null;
+  cadence: string;
+  /** A credit card payment, which links to the card rather than past charges. */
+  kind?: "card";
 };
 
 export type AttentionItem = {
@@ -67,16 +92,24 @@ export type AttentionItem = {
   institution: string;
   message: string;
   needsReconnect: boolean;
+  /** The last good update, so a warning can say how old the numbers are. */
+  lastSuccessAt: string | null;
 };
 
 export type DataHealth = {
   hasConnections: boolean;
+  /** A bank is connected but its first update hasn't finished. */
+  importing: boolean;
   lastUpdatedAt: string | null;
   stale: boolean;
   attention: AttentionItem[];
 };
 
-export type DashboardData = {
+export type DashboardData = DashboardSummary & {
+  /** The owner's calendar date, so every page agrees on what "today" is. */
+  today: string;
+  monthly: MonthlyFlow[];
+  budgets: BudgetRow[];
   metrics: {
     netWorth: number;
     netWorthChange: number | null;
@@ -96,7 +129,6 @@ export type DashboardData = {
   spending: SpendingPoint[];
   accounts: AccountRow[];
   recentTransactions: RecentTransaction[];
-  upcomingBills: UpcomingBill[];
   health: DataHealth;
 };
 
@@ -104,8 +136,6 @@ type Row = Record<string, unknown>;
 
 /** A daily update plus Vercel's up-to-an-hour timing window, with some slack. */
 const STALE_AFTER_MS = 36 * 60 * 60 * 1000;
-const UPCOMING_WINDOW_MS = 30 * 86_400_000;
-const UPCOMING_BILL_LIMIT = 5;
 
 function numberValue(value: unknown): number {
   const parsed = Number(value ?? 0);
@@ -144,6 +174,7 @@ export async function getDashboardData(): Promise<DashboardData> {
           count(*)::int as connected_accounts
         from public.accounts
         where connected = true
+          and in_net_worth = true
       ),
       cash_flow as (
         select
@@ -163,40 +194,82 @@ export async function getDashboardData(): Promise<DashboardData> {
           and transaction_date <= ${lastMonthPoint}::date
           and ${COUNTS_AS_CASH_FLOW}
       ),
-      trend_days as (
-        select generate_series(
-          greatest(
-            (select min(snapshot_date) from public.balance_snapshots),
-            ${today}::date - 365
-          ),
-          ${today}::date,
-          interval '1 day'
-        )::date as day
+      ${netWorthTrendCtes(today)},
+      monthly_rows as (
+        select
+          date_trunc('month', transaction_date)::date::text as month,
+          ${INCOME_TOTAL} as income,
+          ${SPENDING_TOTAL} as spending
+        from public.transactions
+        where transaction_date >= ${monthStart}::date - interval '6 months'
+          and transaction_date < ${monthStart}::date + interval '1 month'
+          and ${COUNTS_AS_CASH_FLOW}
+        group by date_trunc('month', transaction_date)::date
       ),
-      -- Each account's latest known balance on each day. A day an account
-      -- couldn't update then repeats its last value, instead of the whole
-      -- account vanishing and showing as a fake drop in net worth.
-      trend_rows as (
-        select trend_days.day::text as date, sum(known.balance)::float8 as value
-        from trend_days
-        cross join public.accounts
-        cross join lateral (
-          select balance
-          from public.balance_snapshots
-          where account_id = accounts.id
-            and snapshot_date <= trend_days.day
-          order by snapshot_date desc
-          limit 1
-        ) known
-        where accounts.connected = true
-        group by trend_days.day
-      ),
-      trend as (
+      monthly_data as (
         select coalesce(
-          jsonb_agg(jsonb_build_object('date', date, 'value', value) order by date),
+          jsonb_agg(to_jsonb(monthly_rows) order by month),
           '[]'::jsonb
         ) as data
-        from trend_rows
+        from monthly_rows
+      ),
+      -- Net of refunds, so a month's days add up to that month's spending.
+      daily_rows as (
+        select
+          transaction_date::text as date,
+          coalesce(merchant_name, name) as merchant,
+          coalesce(-sum(amount) filter (where not ${IS_INCOME}), 0)::float8 as value
+        from public.transactions
+        where transaction_date >= ${monthStart}::date - interval '3 months'
+          and transaction_date < ${monthStart}::date + interval '1 month'
+          and ${COUNTS_AS_CASH_FLOW}
+        group by transaction_date, coalesce(merchant_name, name)
+      ),
+      daily_data as (
+        select coalesce(
+          jsonb_agg(to_jsonb(daily_rows) order by date),
+          '[]'::jsonb
+        ) as data
+        from daily_rows
+      ),
+      -- Charges this week well above what's normal at the same merchant.
+      unusual_rows as (
+        select
+          t.id,
+          t.category_primary as category,
+          coalesce(t.merchant_name, t.name) as merchant,
+          (-t.amount)::float8 as amount,
+          typical.median as typical,
+          t.transaction_date::text as date
+        from public.transactions t
+        cross join lateral (
+          select
+            percentile_cont(0.5) within group (order by -past.amount)::float8 as median,
+            count(*)::int as charges
+          from public.transactions past
+          where coalesce(past.merchant_name, past.name) =
+              coalesce(t.merchant_name, t.name)
+            and past.amount < 0
+            and past.pending = false
+            and past.id <> t.id
+            and past.transaction_date >= t.transaction_date - 180
+            and past.transaction_date < t.transaction_date
+        ) typical
+        where t.transaction_date >= ${today}::date - 6
+          and t.amount < 0
+          and coalesce(t.category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+          and coalesce(t.category_detailed, '') <> 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+          and typical.charges >= 3
+          and -t.amount >= greatest(50, typical.median * 2.5)
+        order by t.amount
+        limit 3
+      ),
+      unusual_data as (
+        select coalesce(
+          jsonb_agg(to_jsonb(unusual_rows) order by amount desc),
+          '[]'::jsonb
+        ) as data
+        from unusual_rows
       ),
       spending_rows as (
         select
@@ -232,8 +305,15 @@ export async function getDashboardData(): Promise<DashboardData> {
           mask,
           source::text,
           current_balance::float8 as balance,
+          available_balance::float8 as available_balance,
           connected,
-          last_synced_at::text
+          in_net_worth,
+          last_synced_at::text,
+          exists (
+            select 1 from public.plaid_items items
+            where items.item_id = accounts.metadata->>'item_id'
+              and items.status <> 'active'
+          ) as out_of_date
         from public.accounts
         where connected = true
         order by current_balance desc, name
@@ -253,12 +333,16 @@ export async function getDashboardData(): Promise<DashboardData> {
           t.name,
           t.merchant_name,
           t.category_primary as category,
+          t.category_detailed,
           t.amount::float8 as amount,
           t.pending,
+          t.logo_url,
           a.name as account_name,
           coalesce(t.transaction_at, t.transaction_date::timestamp at time zone ${appTimeZone()}) as sort_at
         from public.transactions t
         join public.accounts a on a.id = t.account_id
+        where coalesce(t.category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+          and coalesce(t.category_detailed, '') <> 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
         order by sort_at desc, t.id desc
         limit 8
       ),
@@ -278,13 +362,18 @@ export async function getDashboardData(): Promise<DashboardData> {
             (select max(last_success_at) from public.plaid_items),
             (select last_success_at from public.sync_states where source = 'plaid')
           )::text as last_updated_at,
+          exists (
+            select 1 from public.plaid_items
+            where status = 'active' and last_success_at is null
+          ) as importing,
           coalesce((
             select jsonb_agg(
               jsonb_build_object(
                 'id', id,
                 'institution', institution_name,
                 'message', last_error_message,
-                'needs_reconnect', status = 'login_required'
+                'needs_reconnect', status = 'login_required',
+                'last_success_at', last_success_at
               )
               order by institution_name
             )
@@ -299,18 +388,23 @@ export async function getDashboardData(): Promise<DashboardData> {
       last_month.spent as last_month_spent,
       last_month.transactions as last_month_transactions,
       trend.data as trend,
+      monthly_data.data as monthly,
+      daily_data.data as daily,
+      unusual_data.data as unusual,
       spending.data as spending_by_category,
       account_data.data as accounts,
       transaction_data.data as recent_transactions,
       health.last_updated_at,
+      health.importing,
       health.attention
-    from balances, cash_flow, last_month, trend, spending, account_data,
-      transaction_data, health
+    from balances, cash_flow, last_month, trend, monthly_data, daily_data,
+      unusual_data, spending, account_data, transaction_data, health
   `);
 
-  const [dashboardResult, subscriptions] = await Promise.all([
+  const [dashboardResult, subscriptions, budgets] = await Promise.all([
     dashboardQuery,
     getSubscriptionsData(),
+    getBudgetsData(),
   ]);
 
   const dashboard = dashboardResult[0] as Row | undefined;
@@ -334,23 +428,77 @@ export async function getDashboardData(): Promise<DashboardData> {
   const income = numberValue(dashboard?.income);
   const spending = numberValue(dashboard?.spending);
 
-  const now = Date.now();
-  const upcomingBills = subscriptions.subscriptions
-    .map((item) => ({
-      merchant: item.merchant,
-      amount: item.averageAmount,
-      expectedAt: item.nextExpectedAt,
-    }))
-    .filter((bill) => {
-      const expected = Date.parse(bill.expectedAt);
-      return expected >= now && expected <= now + UPCOMING_WINDOW_MS;
-    })
-    .sort((a, b) => Date.parse(a.expectedAt) - Date.parse(b.expectedAt))
-    .slice(0, UPCOMING_BILL_LIMIT);
-
   const lastUpdatedAt = dashboard?.last_updated_at?.toString() ?? null;
+  const cashOnHand = numberValue(dashboard?.cash_on_hand);
+  const accounts: AccountRow[] = rowsOf(dashboard?.accounts).map((row) => ({
+    id: numberValue(row.id),
+    institutionName: String(row.institution_name),
+    name: String(row.name),
+    type: String(row.type),
+    accountType: String(row.account_type),
+    mask: row.mask ? String(row.mask) : null,
+    source: String(row.source),
+    balance: numberValue(row.balance),
+    availableBalance:
+      row.available_balance == null ? null : numberValue(row.available_balance),
+    connected: Boolean(row.connected),
+    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : null,
+    outOfDate: Boolean(row.out_of_date),
+    inNetWorth: row.in_net_worth !== false,
+  }));
+  const monthly = rowsOf(dashboard?.monthly).map((row) => {
+    const monthIncome = numberValue(row.income);
+    const monthSpending = numberValue(row.spending);
+    return {
+      month: String(row.month),
+      income: monthIncome,
+      spending: monthSpending,
+      net: monthIncome - monthSpending,
+    };
+  });
+  const health: DataHealth = {
+    hasConnections: numberValue(dashboard?.connected_accounts) > 0,
+    importing: Boolean(dashboard?.importing),
+    lastUpdatedAt,
+    stale: isStale(lastUpdatedAt),
+    attention: rowsOf(dashboard?.attention).map((row) => ({
+      id: numberValue(row.id),
+      institution: String(row.institution),
+      message: String(row.message ?? ""),
+      needsReconnect: Boolean(row.needs_reconnect),
+      lastSuccessAt: row.last_success_at ? String(row.last_success_at) : null,
+    })),
+  };
 
   return {
+    ...summarizeDashboard({
+      today,
+      now: Date.now(),
+      accounts,
+      cashOnHand,
+      daily: rowsOf(dashboard?.daily).map((row) => ({
+        date: String(row.date),
+        merchant: String(row.merchant),
+        value: numberValue(row.value),
+      })),
+      monthly,
+      budgets: budgets.budgets,
+      subscriptions: subscriptions.subscriptions,
+      bills: subscriptions.bills,
+      cardPayment: subscriptions.cardPayment,
+      unusual: rowsOf(dashboard?.unusual).map((row) => ({
+        id: numberValue(row.id),
+        category: row.category ? String(row.category) : null,
+        merchant: String(row.merchant),
+        amount: numberValue(row.amount),
+        typical: numberValue(row.typical),
+        date: String(row.date),
+      })),
+      health,
+    }),
+    today,
+    monthly,
+    budgets: budgets.budgets,
     metrics: {
       netWorth,
       netWorthChange,
@@ -363,7 +511,7 @@ export async function getDashboardData(): Promise<DashboardData> {
       monthlyIncome: income,
       monthlySpending: spending,
       investmentValue: numberValue(dashboard?.investment_value),
-      cashOnHand: numberValue(dashboard?.cash_on_hand),
+      cashOnHand,
       moneyOwed: numberValue(dashboard?.money_owed),
       spentByThisPointLastMonth: numberValue(dashboard?.last_month_transactions)
         ? numberValue(dashboard?.last_month_spent)
@@ -374,20 +522,7 @@ export async function getDashboardData(): Promise<DashboardData> {
       category: String(row.category),
       value: numberValue(row.value),
     })),
-    accounts: rowsOf(dashboard?.accounts).map((row) => ({
-      id: numberValue(row.id),
-      institutionName: String(row.institution_name),
-      name: String(row.name),
-      type: String(row.type),
-      accountType: String(row.account_type),
-      mask: row.mask ? String(row.mask) : null,
-      source: String(row.source),
-      balance: numberValue(row.balance),
-      connected: Boolean(row.connected),
-      lastSyncedAt: row.last_synced_at
-        ? String(row.last_synced_at)
-        : null,
-    })),
+    accounts,
     recentTransactions: rowsOf(dashboard?.recent_transactions).map((row) => ({
       id: numberValue(row.id),
       date: String(row.date),
@@ -395,23 +530,36 @@ export async function getDashboardData(): Promise<DashboardData> {
       name: String(row.name),
       merchantName: row.merchant_name ? String(row.merchant_name) : null,
       category: row.category ? String(row.category) : null,
+      categoryDetailed: row.category_detailed
+        ? String(row.category_detailed)
+        : null,
       amount: numberValue(row.amount),
       accountName: String(row.account_name),
       pending: Boolean(row.pending),
+      logoUrl: safePlaidLogoUrl(row.logo_url),
     })),
-    upcomingBills,
-    health: {
-      hasConnections: numberValue(dashboard?.connected_accounts) > 0,
-      lastUpdatedAt,
-      stale: isStale(lastUpdatedAt),
-      attention: rowsOf(dashboard?.attention).map((row) => ({
-        id: numberValue(row.id),
-        institution: String(row.institution),
-        message: String(row.message ?? ""),
-        needsReconnect: Boolean(row.needs_reconnect),
-      })),
-    },
+    health,
   };
+}
+
+export type StaleConnection = {
+  institution: string;
+  lastSuccessAt: string | null;
+};
+
+/** Connections that have stopped updating, so spending pages can say so. */
+export async function getStaleConnections(): Promise<StaleConnection[]> {
+  await requireSession();
+  const rows = await getDb().execute(sql`
+    select institution_name, last_success_at::text as last_success_at
+    from public.plaid_items
+    where status <> 'active'
+    order by last_success_at
+  `);
+  return (rows as Row[]).map((row) => ({
+    institution: String(row.institution_name),
+    lastSuccessAt: row.last_success_at ? String(row.last_success_at) : null,
+  }));
 }
 
 export type ConnectionAccount = {
@@ -474,6 +622,7 @@ export async function getConnectionsData(): Promise<ConnectionsData> {
         select count(*)::int
         from public.accounts a
         where a.connected = true
+          and a.source <> 'manual'
           and not exists (
             select 1 from public.plaid_items known
             where known.item_id = a.metadata->>'item_id'
@@ -486,7 +635,9 @@ export async function getConnectionsData(): Promise<ConnectionsData> {
   let unmanagedAccounts = numberValue((rows[0] as Row | undefined)?.unmanaged_accounts);
   if (!rows.length) {
     const [orphans] = await getDb().execute(sql`
-      select count(*)::int as count from public.accounts where connected = true
+      select count(*)::int as count
+      from public.accounts
+      where connected = true and source <> 'manual'
     `);
     unmanagedAccounts = numberValue((orphans as Row | undefined)?.count);
   }

@@ -1,9 +1,9 @@
 import "server-only";
 
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 
 import { getDb } from "@/db/client";
-import type { AccountRow } from "@/lib/data";
+import type { AccountRow, TrendPoint } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
 import {
   safeMerchantWebsite,
@@ -13,12 +13,17 @@ import {
   COUNTS_AS_CASH_FLOW,
   INCOME_TOTAL,
   IS_INCOME,
+  netWorthTrendCtes,
   SPENDING_TOTAL,
 } from "@/lib/finance-sql";
 import {
+  deriveBills,
+  deriveCardPayment,
   deriveSubscriptions,
   manualSubscriptionInsight,
   subscriptionStreamKey,
+  type CardPaymentSchedule,
+  type RecurringBill,
   type SubscriptionCadence,
   type SubscriptionCandidate,
   type SubscriptionInsight,
@@ -29,6 +34,11 @@ import {
   subtractDays,
   todayInAppTimezone,
 } from "@/lib/timezone";
+import {
+  DEFAULT_FILTERS,
+  type Period,
+  type TransactionFilters,
+} from "@/lib/transaction-filters";
 
 type Row = Record<string, unknown>;
 
@@ -70,15 +80,23 @@ export type TransactionRow = {
   logoUrl: string | null;
   website: string | null;
   updatedAt: string;
+  /** The owner left this out of income and spending. */
+  ignored: boolean;
 };
 
 /** Enough for years of normal use, while keeping the page quick to load. */
 const TRANSACTION_LIMIT = 750;
 
 export type TransactionsData = {
+  today: string;
   transactions: TransactionRow[];
-  /** How many exist in all, so the page can say when it shows only some. */
+  /** How many match, so the page can say when it shows only some. */
   totalCount: number;
+  /**
+   * True once there's more history than fits on the page. Filters then have to
+   * run in the database, because the browser doesn't hold everything.
+   */
+  serverFiltered: boolean;
   categories: string[];
   accounts: string[];
   periodStarts: {
@@ -95,12 +113,65 @@ export type TransactionsData = {
   };
 };
 
-export async function getTransactionsData(): Promise<TransactionsData> {
+function transactionConditions(
+  filters: TransactionFilters,
+  periodStarts: Record<Exclude<Period, "all">, string>,
+): SQL[] {
+  const conditions: SQL[] = [];
+  if (filters.month) {
+    conditions.push(sql`to_char(t.transaction_date, 'YYYY-MM') = ${filters.month}`);
+  } else if (filters.period !== "all") {
+    conditions.push(sql`t.transaction_date >= ${periodStarts[filters.period]}::date`);
+  }
+  if (filters.category !== "all") {
+    conditions.push(sql`t.category_primary = ${filters.category}`);
+  }
+  if (filters.account !== "all") {
+    conditions.push(sql`a.name = ${filters.account}`);
+  }
+  if (filters.status === "pending") conditions.push(sql`t.pending = true`);
+  if (filters.status === "posted") conditions.push(sql`t.pending = false`);
+  if (filters.q) {
+    const pattern = `%${filters.q.replace(/[\\%_]/g, "\\$&")}%`;
+    conditions.push(sql`(
+      t.merchant_name ilike ${pattern}
+      or t.name ilike ${pattern}
+      or a.name ilike ${pattern}
+      or replace(t.category_primary, '_', ' ') ilike ${pattern}
+      or replace(t.category_detailed, '_', ' ') ilike ${pattern}
+      or to_char(abs(t.amount), 'FM999999990.00') ilike ${pattern}
+    )`);
+  }
+  return conditions;
+}
+
+export async function getTransactionsData(
+  filters: TransactionFilters = { ...DEFAULT_FILTERS, period: "all" },
+  openId?: number,
+): Promise<TransactionsData> {
   await requireSession();
   const db = getDb();
   const monthStart = monthStartInAppTimezone();
   const today = todayInAppTimezone();
   const timeZone = appTimeZone();
+  const periodStarts = {
+    mtd: monthStart,
+    last30Days: subtractDays(today, 29),
+    last90Days: subtractDays(today, 89),
+    ytd: `${today.slice(0, 4)}-01-01`,
+  };
+
+  const [counted] = await db.execute(sql`
+    select count(*)::int as total from public.transactions
+  `);
+  const serverFiltered = numberValue((counted as Row | undefined)?.total) > TRANSACTION_LIMIT;
+  const conditions = serverFiltered ? transactionConditions(filters, periodStarts) : [];
+  // A link straight to one transaction has to find it, wherever it falls.
+  const scope = conditions.length
+    ? sql`where (${sql.join(conditions, sql` and `)})${
+        openId ? sql` or t.id = ${openId}` : sql``
+      }`
+    : sql``;
 
   const result = await db.execute(sql`
     with transaction_rows as (
@@ -141,6 +212,7 @@ export async function getTransactionsData(): Promise<TransactionsData> {
         t.raw_data#>>'{location,store_number}' as store_number,
         t.logo_url,
         t.website,
+        t.ignored,
         t.updated_at::text as updated_at,
         a.institution_name,
         a.name as account_name,
@@ -155,7 +227,8 @@ export async function getTransactionsData(): Promise<TransactionsData> {
         ) as sort_at
       from public.transactions t
       join public.accounts a on a.id = t.account_id
-      order by sort_at desc, t.id desc
+      ${scope}
+      order by ${openId ? sql`(t.id = ${openId}) desc, ` : sql``}sort_at desc, t.id desc
       limit ${TRANSACTION_LIMIT}
     ),
     transaction_data as (
@@ -183,10 +256,31 @@ export async function getTransactionsData(): Promise<TransactionsData> {
       where pending = true
     ),
     total as (
-      select count(*)::int as total_count from public.transactions
+      select count(*)::int as total_count
+      from public.transactions t
+      join public.accounts a on a.id = t.account_id
+      ${scope}
+    ),
+    category_list as (
+      select coalesce(
+        jsonb_agg(distinct category_primary) filter (where category_primary is not null),
+        '[]'::jsonb
+      ) as data
+      from public.transactions
+    ),
+    account_list as (
+      select coalesce(jsonb_agg(distinct a.name), '[]'::jsonb) as data
+      from public.accounts a
+      where exists (select 1 from public.transactions t where t.account_id = a.id)
     )
-    select transaction_data.data, metric.*, pending_total.*, total.*
-    from transaction_data, metric, pending_total, total
+    select
+      transaction_data.data,
+      metric.*,
+      pending_total.*,
+      total.*,
+      category_list.data as category_list,
+      account_list.data as account_list
+    from transaction_data, metric, pending_total, total, category_list, account_list
   `);
 
   const row = result[0] as Row | undefined;
@@ -236,26 +330,24 @@ export async function getTransactionsData(): Promise<TransactionsData> {
     logoUrl: safePlaidLogoUrl(item.logo_url),
     website: safeMerchantWebsite(item.website),
     updatedAt: stringValue(item.updated_at),
+    ignored: Boolean(item.ignored),
   }));
 
   const income = numberValue(row?.income);
   const spending = numberValue(row?.spending);
 
   return {
+    today,
     transactions,
     totalCount: numberValue(row?.total_count),
-    categories: Array.from(
-      new Set(transactions.map((item) => item.category).filter(Boolean)),
-    ).sort() as string[],
-    accounts: Array.from(
-      new Set(transactions.map((item) => item.accountName)),
-    ).sort(),
-    periodStarts: {
-      mtd: monthStart,
-      last30Days: subtractDays(today, 29),
-      last90Days: subtractDays(today, 89),
-      ytd: `${today.slice(0, 4)}-01-01`,
-    },
+    serverFiltered,
+    categories: (Array.isArray(row?.category_list) ? row.category_list : [])
+      .map(stringValue)
+      .sort(),
+    accounts: (Array.isArray(row?.account_list) ? row.account_list : [])
+      .map(stringValue)
+      .sort(),
+    periodStarts,
     metrics: {
       income,
       spending,
@@ -266,8 +358,11 @@ export async function getTransactionsData(): Promise<TransactionsData> {
 }
 
 export type AccountsData = {
+  today: string;
+  trend: TrendPoint[];
   accounts: AccountRow[];
   metrics: {
+    netWorth: number;
     assets: number;
     liabilities: number;
     availableCash: number;
@@ -278,7 +373,25 @@ export type AccountsData = {
 export async function getAccountsData(): Promise<AccountsData> {
   await requireSession();
   const db = getDb();
-  const result = await db.execute(sql`
+  const today = todayInAppTimezone();
+  const trendQuery = db.execute(sql`
+    with ${netWorthTrendCtes(today)}
+    select trend.data from trend
+  `);
+  const historyQuery = db.execute(sql`
+    select
+      s.account_id,
+      jsonb_agg(
+        jsonb_build_object('date', s.snapshot_date::text, 'value', s.balance::float8)
+        order by s.snapshot_date
+      ) as history
+    from public.balance_snapshots s
+    join public.accounts a on a.id = s.account_id
+    where a.connected = true
+      and s.snapshot_date >= ${today}::date - 90
+    group by s.account_id
+  `);
+  const accountsQuery = db.execute(sql`
     with account_rows as (
       select
         id,
@@ -291,7 +404,13 @@ export async function getAccountsData(): Promise<AccountsData> {
         current_balance::float8 as balance,
         available_balance::float8 as available_balance,
         connected,
-        last_synced_at::text
+        in_net_worth,
+        last_synced_at::text,
+        exists (
+          select 1 from public.plaid_items items
+          where items.item_id = accounts.metadata->>'item_id'
+            and items.status <> 'active'
+        ) as out_of_date
       from public.accounts
       where connected = true
       order by institution_name, current_balance desc, name
@@ -313,17 +432,45 @@ export async function getAccountsData(): Promise<AccountsData> {
         count(*)::int as connected
       from public.accounts
       where connected = true
+        and in_net_worth = true
     )
     select
       account_data.data,
       account_metric.*
     from account_data, account_metric
   `);
+  const [result, trendResult, historyResult] = await Promise.all([
+    accountsQuery,
+    trendQuery,
+    historyQuery,
+  ]);
 
   const row = result[0] as Row | undefined;
   const accountRows = Array.isArray(row?.data) ? (row.data as Row[]) : [];
+  const trendRows = (trendResult[0] as Row | undefined)?.data;
+  const histories = new Map(
+    (historyResult as Row[]).map((item) => [
+      numberValue(item.account_id),
+      (Array.isArray(item.history) ? (item.history as Row[]) : []).map(
+        (point) => ({
+          date: stringValue(point.date),
+          value: numberValue(point.value),
+        }),
+      ),
+    ]),
+  );
+  const monthAgo = subtractDays(today, 30);
+
   return {
-    accounts: accountRows.map((item) => ({
+    today,
+    trend: (Array.isArray(trendRows) ? (trendRows as Row[]) : []).map((point) => ({
+      date: stringValue(point.date),
+      value: numberValue(point.value),
+    })),
+    accounts: accountRows.map((item) => {
+      const history = histories.get(numberValue(item.id)) ?? [];
+      const baseline = history.findLast((point) => point.date <= monthAgo);
+      return {
       id: numberValue(item.id),
       institutionName: stringValue(item.institution_name),
       name: stringValue(item.name),
@@ -339,8 +486,16 @@ export async function getAccountsData(): Promise<AccountsData> {
       lastSyncedAt: item.last_synced_at
         ? stringValue(item.last_synced_at)
         : null,
-    })),
+      outOfDate: Boolean(item.out_of_date),
+      inNetWorth: item.in_net_worth !== false,
+      history,
+      change30Days: baseline
+        ? numberValue(item.balance) - baseline.value
+        : null,
+      };
+    }),
     metrics: {
+      netWorth: numberValue(row?.assets) - numberValue(row?.liabilities),
       assets: numberValue(row?.assets),
       liabilities: numberValue(row?.liabilities),
       availableCash: numberValue(row?.available_cash),
@@ -351,6 +506,9 @@ export async function getAccountsData(): Promise<AccountsData> {
 
 export type SubscriptionsData = {
   subscriptions: SubscriptionInsight[];
+  /** Monthly must-pays like rent and utilities, which aren't subscriptions. */
+  bills: RecurringBill[];
+  cardPayment: CardPaymentSchedule | null;
   transactionChoices: {
     id: number;
     merchant: string;
@@ -368,6 +526,8 @@ export type SubscriptionsData = {
     annualEstimate: number;
     dueNext30Days: number;
     detected: number;
+    billsMonthly: number;
+    cardBalance: number;
   };
 };
 
@@ -398,10 +558,10 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
     where amount < 0
       and pending = false
       and transaction_date >= current_date - interval '800 days'
+      and ignored = false
       and coalesce(category_primary, '') not in (
         'TRANSFER_IN',
         'TRANSFER_OUT',
-        'LOAN_PAYMENTS',
         'BANK_FEES'
       )
     order by occurred_at
@@ -444,10 +604,16 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
     order by occurred_at desc
     limit 200
   `);
-  const [candidateRows, ruleRows, transactionRows] = await Promise.all([
+  const cardQuery = db.execute(sql`
+    select coalesce(abs(sum(current_balance)), 0)::float8 as owed
+    from public.accounts
+    where connected = true and in_net_worth = true and account_type = 'credit'
+  `);
+  const [candidateRows, ruleRows, transactionRows, cardRows] = await Promise.all([
     candidateQuery,
     ruleQuery,
     transactionQuery,
+    cardQuery,
   ]);
 
   const candidates = (candidateRows as Row[]).map((item) => ({
@@ -467,6 +633,9 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
     (ruleRows as Row[]).map((item) => stringValue(item.stream_key)),
   );
   const automatic = deriveSubscriptions(candidates).filter(
+    (item) => !ruleKeys.has(item.streamKey),
+  );
+  const bills = deriveBills(candidates).filter(
     (item) => !ruleKeys.has(item.streamKey),
   );
   const manual = (ruleRows as Row[]).flatMap((item) => {
@@ -543,9 +712,13 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
 
   return {
     subscriptions,
+    bills,
+    cardPayment: deriveCardPayment(candidates),
     transactionChoices,
     dismissed,
     metrics: {
+      billsMonthly: bills.reduce((sum, item) => sum + item.amount, 0),
+      cardBalance: numberValue((cardRows[0] as Row | undefined)?.owed),
       monthlyEstimate,
       annualEstimate: subscriptions.reduce(
         (sum, item) => sum + item.annualized,
@@ -593,7 +766,8 @@ export type InvestmentsData = {
   accounts: InvestmentAccountSummary[];
   holdings: HoldingSummary[];
   allocation: { type: string; value: number; percent: number }[];
-  history: { date: string; value: number }[];
+  /** Oldest first. `value` is the gain or loss; `marketValue` what it was worth. */
+  history: { date: string; value: number; marketValue: number }[];
   metrics: {
     value: number;
     costBasis: number | null;
@@ -654,7 +828,8 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
     db.execute(sql`
       select
         snapshots.snapshot_date::text as date,
-        sum(snapshots.unrealized_gain)::float8 as value
+        sum(snapshots.unrealized_gain)::float8 as value,
+        sum(snapshots.market_value)::float8 as market_value
       from public.investment_snapshots snapshots
       join public.accounts a on a.id = snapshots.account_id
       where snapshots.snapshot_date >= ${today}::date - 365
@@ -737,6 +912,7 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
     history: (historyResult as Row[]).map((item) => ({
       date: stringValue(item.date),
       value: numberValue(item.value),
+      marketValue: numberValue(item.market_value),
     })),
     metrics: {
       value,
@@ -746,7 +922,10 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
       accounts: accounts.length,
       gainIsPartial:
         known.length < accounts.length ||
-        holdings.some((holding) => holding.costBasis === null),
+        // Cash has no gain to report, so it can't leave anything out.
+        holdings.some(
+          (holding) => holding.costBasis === null && holding.assetType !== "cash",
+        ),
     },
   };
 }
@@ -757,9 +936,14 @@ export type BudgetRow = {
   monthlyLimit: number | null;
   remaining: number | null;
   percent: number | null;
+  /** What a recent month has run, for suggesting a realistic budget. */
+  usual: number | null;
+  /** Charges waiting to post, which aren't in `spent` yet. */
+  pending: number;
 };
 
 export type BudgetsData = {
+  today: string;
   budgets: BudgetRow[];
   metrics: {
     planned: number;
@@ -785,17 +969,62 @@ export async function getBudgetsData(): Promise<BudgetsData> {
         and not ${IS_INCOME}
       group by coalesce(category_primary, 'OTHER')
     ),
+    recent as (
+      select
+        coalesce(category_primary, 'OTHER') as category,
+        date_trunc('month', transaction_date)::date as month,
+        sum(-amount) as spent
+      from public.transactions
+      where transaction_date >= ${monthStart}::date - interval '3 months'
+        and transaction_date < ${monthStart}::date
+        and ${COUNTS_AS_CASH_FLOW}
+        and not ${IS_INCOME}
+      group by 1, 2
+    ),
+    -- Divides by the months with any history, not always three, so a new
+    -- account's first month isn't watered down.
+    recent_months as (
+      select greatest(count(distinct month), 1)::float8 as months from recent
+    ),
+    category_usual as (
+      select
+        category,
+        greatest(sum(spent), 0)::float8 / (select months from recent_months) as usual
+      from recent
+      group by category
+    ),
+    category_pending as (
+      select
+        coalesce(category_primary, 'OTHER') as category,
+        greatest(sum(-amount), 0)::float8 as pending
+      from public.transactions
+      where transaction_date >= ${monthStart}::date
+        and pending = true
+        and ignored = false
+        and amount < 0
+        and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+        and coalesce(category_detailed, '') <> 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+      group by 1
+    ),
     categories as (
       select category from category_spend
+      union
+      select category from category_usual
+      union
+      select category from category_pending
       union
       select category_primary as category from public.budgets
     )
     select
       categories.category,
       coalesce(category_spend.spent, 0)::float8 as spent,
-      budgets.monthly_limit::float8 as monthly_limit
+      budgets.monthly_limit::float8 as monthly_limit,
+      category_usual.usual,
+      coalesce(category_pending.pending, 0)::float8 as pending
     from categories
     left join category_spend using (category)
+    left join category_usual using (category)
+    left join category_pending using (category)
     left join public.budgets on budgets.category_primary = categories.category
     order by
       budgets.monthly_limit is null,
@@ -814,6 +1043,8 @@ export async function getBudgetsData(): Promise<BudgetsData> {
       remaining: monthlyLimit == null ? null : monthlyLimit - spent,
       percent:
         monthlyLimit == null ? null : (spent / monthlyLimit) * 100,
+      usual: item.usual == null ? null : numberValue(item.usual),
+      pending: numberValue(item.pending),
     };
   });
   const planned = budgets.reduce(
@@ -826,6 +1057,7 @@ export async function getBudgetsData(): Promise<BudgetsData> {
   );
 
   return {
+    today: todayInAppTimezone(),
     budgets,
     metrics: {
       planned,
@@ -836,7 +1068,20 @@ export async function getBudgetsData(): Promise<BudgetsData> {
   };
 }
 
+export type SpendingCategory = {
+  category: string;
+  value: number;
+  previous: number;
+  /** A typical recent month for this category, when there's history. */
+  usual: number | null;
+  /** The six months ending with the selected one, oldest first. */
+  history: number[];
+  details: { detail: string | null; value: number; count: number }[];
+  merchants: { merchant: string; value: number; count: number }[];
+};
+
 export type SpendingData = {
+  today: string;
   selectedMonth: string;
   availableMonths: string[];
   monthly: {
@@ -845,8 +1090,19 @@ export type SpendingData = {
     spending: number;
     net: number;
   }[];
-  categories: { category: string; value: number; previous: number }[];
+  categories: SpendingCategory[];
+  /** Monthly limits by category, for comparing any month against its budget. */
+  limits: Record<string, number>;
   topMerchants: { merchant: string; value: number; count: number }[];
+  incomeSources: { source: string; value: number; count: number }[];
+  largest: {
+    id: number;
+    merchant: string;
+    value: number;
+    date: string;
+    category: string | null;
+    categoryDetailed: string | null;
+  }[];
   metrics: {
     income: number;
     spending: number;
@@ -872,7 +1128,11 @@ export async function getSpendingData(
   const db = getDb();
   const currentMonth = monthStartInAppTimezone();
   const requestedMonthStart = spendingMonthStart(requestedMonth);
-  const result = await db.execute(sql`
+  const limitsQuery = db.execute(sql`
+    select category_primary as category, monthly_limit::float8 as monthly_limit
+    from public.budgets
+  `);
+  const resultQuery = db.execute(sql`
     with bounds as (
       select least(
         coalesce(date_trunc('month', min(transaction_date))::date, ${currentMonth}::date),
@@ -887,22 +1147,32 @@ export async function getSpendingData(
       ) as month
       from bounds
     ),
+    -- The chart stays on the latest months while any of them is picked, so
+    -- choosing a month doesn't slide the whole chart out from under the pointer.
+    chart_window as (
+      select case
+        when selection.month >= ${currentMonth}::date - interval '11 months'
+          then ${currentMonth}::date
+        else selection.month
+      end as last_month
+      from selection
+    ),
     months as (
       select generate_series(
-        selection.month - interval '5 months',
-        selection.month,
+        chart_window.last_month - interval '16 months',
+        chart_window.last_month,
         interval '1 month'
       )::date as month
-      from selection
+      from chart_window
     ),
     monthly_rows as (
       select
         date_trunc('month', transaction_date)::date as month,
         ${INCOME_TOTAL} as income,
         ${SPENDING_TOTAL} as spending
-      from public.transactions, selection
-      where transaction_date >= selection.month - interval '5 months'
-        and transaction_date < selection.month + interval '1 month'
+      from public.transactions, chart_window
+      where transaction_date >= chart_window.last_month - interval '16 months'
+        and transaction_date < chart_window.last_month + interval '1 month'
         and ${COUNTS_AS_CASH_FLOW}
       group by date_trunc('month', transaction_date)::date
     ),
@@ -933,42 +1203,133 @@ export async function getSpendingData(
       ) as data
       from available_month_rows
     ),
-    category_totals as (
+    category_months as (
       select
         coalesce(category_primary, 'OTHER') as category,
-        coalesce(sum(-amount) filter (
-          where transaction_date >= selection.month
-        ), 0)::float8 as value,
-        coalesce(sum(-amount) filter (
-          where transaction_date < selection.month
-        ), 0)::float8 as previous
+        date_trunc('month', transaction_date)::date as month,
+        sum(-amount)::float8 as value
       from public.transactions, selection
-      where transaction_date >= selection.month - interval '1 month'
+      where transaction_date >= selection.month - interval '5 months'
         and transaction_date < selection.month + interval '1 month'
         and ${COUNTS_AS_CASH_FLOW}
         and not ${IS_INCOME}
-      group by coalesce(category_primary, 'OTHER')
+      group by 1, 2
     ),
     category_rows as (
-      select category, value, greatest(previous, 0) as previous
-      from category_totals
-      where value > 0
+      select
+        category_months.category,
+        coalesce(sum(category_months.value) filter (
+          where category_months.month = selection.month
+        ), 0)::float8 as value,
+        jsonb_object_agg(category_months.month::text, category_months.value) as history
+      from category_months, selection
+      group by category_months.category, selection.month
+      having coalesce(sum(category_months.value) filter (
+        where category_months.month = selection.month
+      ), 0) > 0
       order by value desc
-      limit 10
+      limit 12
     ),
     category_data as (
       select coalesce(
-        jsonb_agg(
-          jsonb_build_object(
-            'category', category,
-            'value', value,
-            'previous', previous
-          )
-          order by value desc
-        ),
+        jsonb_agg(to_jsonb(category_rows) order by value desc),
         '[]'::jsonb
       ) as data
       from category_rows
+    ),
+    detail_rows as (
+      select
+        coalesce(category_primary, 'OTHER') as category,
+        category_detailed as detail,
+        sum(-amount)::float8 as value,
+        count(*)::int as count
+      from public.transactions, selection
+      where transaction_date >= selection.month
+        and transaction_date < selection.month + interval '1 month'
+        and ${COUNTS_AS_CASH_FLOW}
+        and not ${IS_INCOME}
+      group by 1, 2
+      having sum(-amount) > 0
+    ),
+    detail_data as (
+      select coalesce(
+        jsonb_agg(to_jsonb(detail_rows) order by value desc),
+        '[]'::jsonb
+      ) as data
+      from detail_rows
+    ),
+    category_merchant_rows as (
+      select category, merchant, value, count
+      from (
+        select
+          coalesce(category_primary, 'OTHER') as category,
+          coalesce(merchant_name, name) as merchant,
+          sum(-amount)::float8 as value,
+          count(*)::int as count,
+          row_number() over (
+            partition by coalesce(category_primary, 'OTHER')
+            order by sum(-amount) desc
+          ) as merchant_rank
+        from public.transactions, selection
+        where transaction_date >= selection.month
+          and transaction_date < selection.month + interval '1 month'
+          and ${COUNTS_AS_CASH_FLOW}
+          and not ${IS_INCOME}
+        group by 1, 2
+        having sum(-amount) > 0
+      ) ranked
+      where merchant_rank <= 4
+    ),
+    category_merchant_data as (
+      select coalesce(
+        jsonb_agg(to_jsonb(category_merchant_rows) order by value desc),
+        '[]'::jsonb
+      ) as data
+      from category_merchant_rows
+    ),
+    income_rows as (
+      select
+        coalesce(merchant_name, name) as source,
+        sum(amount)::float8 as value,
+        count(*)::int as count
+      from public.transactions, selection
+      where transaction_date >= selection.month
+        and transaction_date < selection.month + interval '1 month'
+        and ${COUNTS_AS_CASH_FLOW}
+        and ${IS_INCOME}
+      group by coalesce(merchant_name, name)
+      order by value desc
+      limit 5
+    ),
+    income_data as (
+      select coalesce(
+        jsonb_agg(to_jsonb(income_rows) order by value desc),
+        '[]'::jsonb
+      ) as data
+      from income_rows
+    ),
+    largest_rows as (
+      select
+        id,
+        coalesce(merchant_name, name) as merchant,
+        (-amount)::float8 as value,
+        transaction_date::text as date,
+        category_primary as category,
+        category_detailed
+      from public.transactions, selection
+      where transaction_date >= selection.month
+        and transaction_date < selection.month + interval '1 month'
+        and amount < 0
+        and ${COUNTS_AS_CASH_FLOW}
+      order by amount
+      limit 5
+    ),
+    largest_data as (
+      select coalesce(
+        jsonb_agg(to_jsonb(largest_rows) order by value desc),
+        '[]'::jsonb
+      ) as data
+      from largest_rows
     ),
     merchant_rows as (
       select
@@ -995,12 +1356,17 @@ export async function getSpendingData(
     select
       monthly_data.data as monthly,
       category_data.data as categories,
+      detail_data.data as details,
+      category_merchant_data.data as category_merchants,
       merchant_data.data as top_merchants,
+      income_data.data as income_sources,
+      largest_data.data as largest,
       available_month_data.data as available_months,
       selection.month::text as selected_month
-    from monthly_data, category_data, merchant_data, available_month_data,
-      selection
+    from monthly_data, category_data, detail_data, category_merchant_data,
+      merchant_data, income_data, largest_data, available_month_data, selection
   `);
+  const [result, limitRows] = await Promise.all([resultQuery, limitsQuery]);
 
   const row = result[0] as Row | undefined;
   const monthly = (Array.isArray(row?.monthly) ? (row.monthly as Row[]) : []).map(
@@ -1015,13 +1381,48 @@ export async function getSpendingData(
       };
     },
   );
-  const categories = (
-    Array.isArray(row?.categories) ? (row.categories as Row[]) : []
-  ).map((item) => ({
-    category: stringValue(item.category),
-    value: numberValue(item.value),
-    previous: numberValue(item.previous),
-  }));
+  const rowsOf = (value: unknown) => (Array.isArray(value) ? (value as Row[]) : []);
+  const selectedMonth = stringValue(row?.selected_month);
+  const selectedIndex = monthly.findIndex((item) => item.month === selectedMonth);
+  const historyMonths = monthly
+    .slice(Math.max(selectedIndex - 5, 0), selectedIndex + 1)
+    .map((item) => item.month);
+  const earlierMonths = monthly
+    .slice(Math.max(selectedIndex - 3, 0), Math.max(selectedIndex, 0))
+    .filter((item) => item.spending > 0);
+  // Only months the owner has data for count toward what's usual.
+  const comparisonMonths = earlierMonths.map((item) => item.month);
+  const details = rowsOf(row?.details);
+  const categoryMerchants = rowsOf(row?.category_merchants);
+  const categories = rowsOf(row?.categories).map((item) => {
+    const category = stringValue(item.category);
+    const history = (item.history ?? {}) as Record<string, unknown>;
+    const spentIn = (month: string) => Math.max(numberValue(history[month]), 0);
+    return {
+      category,
+      value: numberValue(item.value),
+      previous: spentIn(historyMonths.at(-2) ?? ""),
+      usual: comparisonMonths.length
+        ? comparisonMonths.reduce((sum, month) => sum + spentIn(month), 0) /
+          comparisonMonths.length
+        : null,
+      history: historyMonths.map(spentIn),
+      details: details
+        .filter((detail) => stringValue(detail.category) === category)
+        .map((detail) => ({
+          detail: detail.detail ? stringValue(detail.detail) : null,
+          value: numberValue(detail.value),
+          count: numberValue(detail.count),
+        })),
+      merchants: categoryMerchants
+        .filter((merchant) => stringValue(merchant.category) === category)
+        .map((merchant) => ({
+          merchant: stringValue(merchant.merchant),
+          value: numberValue(merchant.value),
+          count: numberValue(merchant.count),
+        })),
+    };
+  });
   const topMerchants = (
     Array.isArray(row?.top_merchants) ? (row.top_merchants as Row[]) : []
   ).map((item) => ({
@@ -1029,13 +1430,11 @@ export async function getSpendingData(
     value: numberValue(item.value),
     count: numberValue(item.count),
   }));
-  const selectedMetrics = monthly.at(-1);
-  const earlierMonths = monthly
-    .slice(0, -1)
-    .filter((month) => month.spending > 0);
+  const selectedMetrics = monthly[selectedIndex];
 
   return {
-    selectedMonth: stringValue(row?.selected_month),
+    today: todayInAppTimezone(),
+    selectedMonth,
     availableMonths: (
       Array.isArray(row?.available_months)
         ? (row.available_months as unknown[])
@@ -1043,7 +1442,28 @@ export async function getSpendingData(
     ).map(stringValue),
     monthly,
     categories,
+    limits: Object.fromEntries(
+      (limitRows as Row[]).map((item) => [
+        stringValue(item.category),
+        numberValue(item.monthly_limit),
+      ]),
+    ),
     topMerchants,
+    incomeSources: rowsOf(row?.income_sources).map((item) => ({
+      source: stringValue(item.source),
+      value: numberValue(item.value),
+      count: numberValue(item.count),
+    })),
+    largest: rowsOf(row?.largest).map((item) => ({
+      id: numberValue(item.id),
+      merchant: stringValue(item.merchant),
+      value: numberValue(item.value),
+      date: stringValue(item.date),
+      category: item.category ? stringValue(item.category) : null,
+      categoryDetailed: item.category_detailed
+        ? stringValue(item.category_detailed)
+        : null,
+    })),
     metrics: {
       income: selectedMetrics?.income ?? 0,
       spending: selectedMetrics?.spending ?? 0,

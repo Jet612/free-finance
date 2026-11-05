@@ -137,3 +137,24 @@ export async function saveBudget(
   revalidatePath("/");
   return { status: "saved", message: "Budget saved." };
 }
+
+export async function removeBudget(
+  _previousState: BudgetActionState,
+  formData: FormData,
+): Promise<BudgetActionState> {
+  void _previousState;
+  await requireSession();
+  const parsed = budgetSchema.shape.category.safeParse(
+    String(formData.get("category") ?? "").trim().toUpperCase(),
+  );
+  if (!parsed.success) {
+    return { status: "error", message: "That budget couldn't be removed." };
+  }
+
+  await getDb().execute(sql`
+    delete from public.budgets where category_primary = ${parsed.data}
+  `);
+  revalidatePath("/budgets");
+  revalidatePath("/");
+  return { status: "saved", message: "Budget removed." };
+}

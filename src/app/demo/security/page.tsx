@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Security demo" };
 export default function DemoSecurityPage() {
   return (
     <div className="grid gap-6">
-      <PageHeader title="Security" />
+      <PageHeader title="Security" detail="Add a second step to your sign-in." />
       <DemoSecuritySettings />
     </div>
   );

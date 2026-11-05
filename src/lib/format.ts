@@ -26,7 +26,7 @@ export function formatPercent(
   maximumFractionDigits = 1,
 ): string {
   if (value == null || !Number.isFinite(value)) return "—";
-  return `${value.toLocaleString("en-US", { maximumFractionDigits })}%`;
+  return `${value.toLocaleString("en-US", { maximumFractionDigits }).replace("-", "\u2212")}%`;
 }
 
 export function formatQuantity(value: number): string {
@@ -154,4 +154,100 @@ export function titleCase(value: string | null): string {
     .replaceAll("_", " ")
     .toLowerCase()
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+const wholeCurrencyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+/** Headline figures: nobody needs the cents on a net worth. */
+export function formatWholeCurrency(value: number): string {
+  return wholeCurrencyFormatter.format(Number.isFinite(value) ? value : 0);
+}
+
+/** For a change: always carries a sign, with a true minus. */
+export function formatSignedCurrency(value: number, whole = false): string {
+  const amount = (whole ? formatWholeCurrency : formatCurrency)(Math.abs(value));
+  if (Math.abs(value) < (whole ? 0.5 : 0.005)) return amount;
+  return `${value < 0 ? "−" : "+"}${amount}`;
+}
+
+/** A plain amount, with a true minus when it's negative. */
+export function formatAmount(value: number): string {
+  const amount = formatCurrency(Math.abs(value));
+  return value < 0 ? `−${amount}` : amount;
+}
+
+/** Calendar dates are stored without a time, so they never shift by time zone. */
+function calendarDate(value: string): Date {
+  return new Date(`${value.slice(0, 10)}T12:00:00Z`);
+}
+
+export function formatShortDate(value: string, withYear = false): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: withYear ? "numeric" : undefined,
+    timeZone: "UTC",
+  }).format(calendarDate(value));
+}
+
+export function formatLongDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(calendarDate(value));
+}
+
+export function formatLongMonth(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    timeZone: "UTC",
+  }).format(calendarDate(`${value.slice(0, 7)}-15`));
+}
+
+export function formatMonthYear(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(calendarDate(`${value.slice(0, 7)}-15`));
+}
+
+/** A heading for a day of transactions, relative to the owner's today. */
+export function formatDayHeading(date: string, today: string): string {
+  const days = Math.round(
+    (calendarDate(today).getTime() - calendarDate(date).getTime()) / 86_400_000,
+  );
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: date.slice(0, 4) === today.slice(0, 4) ? undefined : "numeric",
+    timeZone: "UTC",
+  }).format(calendarDate(date));
+}
+
+export function plural(count: number, noun: string, many = `${noun}s`): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? noun : many}`;
+}
+
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  ira: "IRA",
+  "roth ira": "Roth IRA",
+  "401k": "401(k)",
+  "403b": "403(b)",
+  hsa: "HSA",
+  cd: "CD",
+};
+
+export function accountTypeLabel(value: string): string {
+  const key = value.toLowerCase();
+  return ACCOUNT_TYPE_LABELS[key] ?? key;
 }

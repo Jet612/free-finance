@@ -21,7 +21,6 @@ import {
 import type { Factor, PasskeyListItem } from "@supabase/supabase-js";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -119,7 +118,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
     const { data, error } = await supabase.auth.registerPasskey();
     if (error || !data) {
       setMessage(
-        "Passkey enrollment did not complete. Confirm this domain is allowed in Supabase and retry.",
+        "That passkey wasn't saved. Try again.",
       );
       setPending(null);
       return;
@@ -188,7 +187,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
     const supabase = createClient();
     const existing = await supabase.auth.mfa.listFactors();
     if (existing.error) {
-      setMessage("Authenticator enrollment could not start. Please retry.");
+      setMessage("That didn't start. Try again.");
       setPending(null);
       return;
     }
@@ -208,7 +207,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
       issuer: "Free Finance",
     });
     if (error) {
-      setMessage("Authenticator enrollment could not start. Please retry.");
+      setMessage("That didn't start. Try again.");
       setPending(null);
       return;
     }
@@ -248,7 +247,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
 
     setEnrollment(null);
     setMessage(
-      "Authenticator MFA is active. Future sign-ins will require a current code.",
+      "Your authenticator app is on. Future sign-ins will require a current code.",
     );
     await refresh();
     setPending(null);
@@ -262,7 +261,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
     });
     setEnrollment(null);
     setShowSecret(false);
-    setMessage("Authenticator enrollment canceled.");
+    setMessage("Canceled.");
     setPending(null);
   }
 
@@ -282,7 +281,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
     });
     setMessage(
       error
-        ? "The authenticator could not be removed. Sign in with MFA again and retry."
+        ? "The authenticator could not be removed. Sign in with your authenticator app again and retry."
         : "Authenticator removed.",
     );
     await refresh();
@@ -308,33 +307,25 @@ export function SecuritySettings({ email }: { email: string | null }) {
         </Alert>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>Account</CardDescription>
-            <CardTitle className="truncate">{email || "Supabase user"}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>Passkeys</CardDescription>
-            <CardTitle>
-              {passkeys.length ? `${passkeys.length} enrolled` : "Optional"}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>Authenticator MFA</CardDescription>
-            <CardTitle className="flex items-center gap-2">
-              {totpFactors.length ? "Enabled" : "Optional"}
-              <Badge variant={totpFactors.length ? "default" : "secondary"}>
-                {currentLevel === "aal2" ? "AAL2" : "AAL1"}
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
+      <dl className="grid gap-x-10 gap-y-3 sm:flex">
+        <div className="min-w-0">
+          <dt className="text-[0.8125rem] text-muted-foreground">Signed in as</dt>
+          <dd className="truncate text-[0.9375rem] font-medium">{email || "Your account"}</dd>
+        </div>
+        <div>
+          <dt className="text-[0.8125rem] text-muted-foreground">Passkeys</dt>
+          <dd className="text-[0.9375rem] font-medium">
+            {passkeys.length ? `${passkeys.length} added` : "None yet"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[0.8125rem] text-muted-foreground">Authenticator app</dt>
+          <dd className="text-[0.9375rem] font-medium">
+            {totpFactors.length ? "On" : "Off"}
+            {totpFactors.length > 0 && currentLevel === "aal2" && ", this session is verified"}
+          </dd>
+        </div>
+      </dl>
 
       <Card>
         <CardHeader className="border-b">
@@ -345,7 +336,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
             <div>
               <CardTitle>Passkeys</CardTitle>
               <CardDescription>
-                Phishing-resistant sign-in with Touch ID, Face ID, Windows
+                Sign in with Touch ID, Face ID, Windows
                 Hello, or a hardware security key.
               </CardDescription>
             </div>
@@ -436,9 +427,8 @@ export function SecuritySettings({ email }: { email: string | null }) {
           </form>
 
           <p className="text-xs leading-5 text-muted-foreground">
-            Passkeys are optional and domain-bound. Add at least two before
-            treating them as your primary recovery path. Supabase currently
-            labels this API experimental.
+            Passkeys only work on this site. Add at least two, in case you lose a
+            device.
           </p>
         </CardContent>
       </Card>
@@ -450,9 +440,9 @@ export function SecuritySettings({ email }: { email: string | null }) {
               <Smartphone className="size-5" />
             </div>
             <div>
-              <CardTitle>Authenticator app (TOTP)</CardTitle>
+              <CardTitle>Authenticator app</CardTitle>
               <CardDescription>
-                Optional second-factor codes from 1Password, Authy, Google
+                Six-digit codes from 1Password, Authy, Google
                 Authenticator, or another compatible app.
               </CardDescription>
             </div>
@@ -524,7 +514,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
                       readOnly
                       type={showSecret ? "text" : "password"}
                       value={enrollment.secret}
-                      className="font-mono"
+                      className="tnum"
                     />
                     <Button
                       type="button"
@@ -549,7 +539,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
                       pattern="[0-9]{6}"
                       maxLength={6}
                       required
-                      className="font-mono tracking-[0.25em]"
+                      className="tnum tracking-[0.25em]"
                     />
                   </div>
                   <Button type="submit" disabled={pending !== null}>
@@ -607,7 +597,7 @@ export function SecuritySettings({ email }: { email: string | null }) {
             </AlertTitle>
             <AlertDescription>
               {totpFactors.length
-                ? "Because you enrolled TOTP, every new password or passkey session must complete a current authenticator code."
+                ? "Because you added an authenticator app, you'll be asked for a code each time you sign in."
                 : "Leave this disabled for simpler sign-in. Enabling it adds a required code after password or passkey authentication."}
             </AlertDescription>
           </Alert>

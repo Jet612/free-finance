@@ -128,7 +128,7 @@ describe("sync engine", { skip: !databaseUrl }, () => {
     fakeItems.clear();
     seenTokens.clear();
     await db.execute(drizzleSql`
-      truncate public.plaid_items, public.accounts, public.sync_states,
+      truncate public.plaid_items, public.accounts, public.merchant_rules, public.sync_states,
         public.sync_runs restart identity cascade
     `);
   });
@@ -317,6 +317,74 @@ describe("sync engine", { skip: !databaseUrl }, () => {
     assert.equal(Number(row.amount), -8);
     const [item] = await db.select().from(schema.plaidItems);
     assert.equal(item.cursor, "cursor-2");
+  });
+
+  test("a category the owner picked survives the next sync", async () => {
+    await connect("item-1", "token-1", {
+      accounts: [account("a1")],
+      pages: [{ added: [plaidTransaction("t1", "a1", 5)] }],
+    });
+    await engine.runSync("manual");
+    await db.execute(drizzleSql`
+      update public.transactions
+      set category_primary = 'TRAVEL', category_detailed = null, category_locked = true
+    `);
+
+    fakeItems.get("token-1")!.pages = [
+      {},
+      { modified: [plaidTransaction("t1", "a1", 8)] },
+    ];
+    await engine.runSync("manual");
+
+    const [row] = await db.select().from(schema.transactions);
+    assert.equal(row.categoryPrimary, "TRAVEL");
+    assert.equal(row.categoryDetailed, null);
+    assert.equal(Number(row.amount), -8);
+  });
+
+  test("a transaction left out of totals stays left out after a sync", async () => {
+    await connect("item-1", "token-1", {
+      accounts: [account("a1")],
+      pages: [{ added: [plaidTransaction("t1", "a1", 5)] }],
+    });
+    await engine.runSync("manual");
+    await db.execute(drizzleSql`update public.transactions set ignored = true`);
+
+    fakeItems.get("token-1")!.pages = [
+      {},
+      { modified: [plaidTransaction("t1", "a1", 8)] },
+    ];
+    await engine.runSync("manual");
+
+    const [row] = await db.select().from(schema.transactions);
+    assert.equal(row.ignored, true);
+  });
+
+  test("a merchant rule files new charges as they arrive", async () => {
+    const merchantName = "Rule Merchant";
+    await db.insert(schema.merchantRules).values({
+      merchant: merchantName,
+      categoryPrimary: "TRAVEL",
+    });
+    await connect("item-1", "token-1", {
+      accounts: [account("a1")],
+      pages: [
+        {
+          added: [
+            { ...plaidTransaction("t1", "a1", 5), merchant_name: merchantName },
+            plaidTransaction("t2", "a1", 7),
+          ],
+        },
+      ],
+    });
+    await engine.runSync("manual");
+
+    const rows = await db.select().from(schema.transactions);
+    const ruled = rows.find((row) => row.externalId === "t1");
+    const other = rows.find((row) => row.externalId === "t2");
+    assert.equal(ruled?.categoryPrimary, "TRAVEL");
+    assert.equal(ruled?.categoryLocked, true);
+    assert.notEqual(other?.categoryPrimary, "TRAVEL");
   });
 
   test("runs at most once a day on schedule, but a person can still refresh", async () => {

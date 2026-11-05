@@ -194,8 +194,9 @@ async function syncItem(
             name: sql`excluded.name`,
             merchantName: sql`excluded.merchant_name`,
             amount: sql`excluded.amount`,
-            categoryPrimary: sql`excluded.category_primary`,
-            categoryDetailed: sql`excluded.category_detailed`,
+            // A category the owner picked outranks whatever the bank says next.
+            categoryPrimary: sql`case when ${transactions.categoryLocked} then ${transactions.categoryPrimary} else excluded.category_primary end`,
+            categoryDetailed: sql`case when ${transactions.categoryLocked} then ${transactions.categoryDetailed} else excluded.category_detailed end`,
             pending: sql`excluded.pending`,
             paymentChannel: sql`excluded.payment_channel`,
             currencyCode: sql`excluded.currency_code`,
@@ -211,6 +212,18 @@ async function syncItem(
         .delete(transactions)
         .where(inArray(transactions.externalId, batch));
     }
+    // New charges from a merchant the owner has already filed somewhere.
+    await tx.execute(sql`
+      update public.transactions t
+      set
+        category_primary = rules.category_primary,
+        category_detailed = null,
+        category_locked = true,
+        updated_at = now()
+      from public.merchant_rules rules
+      where coalesce(t.merchant_name, t.name) = rules.merchant
+        and t.category_locked = false
+    `);
 
     let holdingCount = 0;
     if (investments) {

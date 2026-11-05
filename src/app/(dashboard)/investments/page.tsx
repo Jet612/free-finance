@@ -10,7 +10,7 @@ export default async function InvestmentsPage() {
   return (
     <InvestmentsView
       data={await getInvestmentsData()}
-      emptyAction={<AddConnectionButtons />}
+      emptyAction={<AddConnectionButtons only="investment" />}
     />
   );
 }

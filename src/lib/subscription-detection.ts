@@ -1,5 +1,8 @@
 const DAY_MS = 86_400_000;
 const MAX_RECENT_OCCURRENCES = 6;
+const MIN_CHARGES_AT_OLD_PRICE = 2;
+/** A bigger jump is more likely a different plan or a different purchase. */
+const MAX_PRICE_CHANGE = 0.6;
 
 export type SubscriptionCandidate = {
   merchant: string;
@@ -32,6 +35,10 @@ export type SubscriptionInsight = {
   nextExpectedAt: string;
   confidence: "Strong match" | "Likely" | "Manual";
   source: "Automatic" | "Manual";
+  /** What it cost before its latest price change, if it had one. */
+  previousAmount: number | null;
+  /** The first charge at the current price. */
+  priceChangedAt: string | null;
 };
 
 type Cadence = {
@@ -130,6 +137,40 @@ function median(values: number[]): number {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+/** How far a charge can drift and still count as the same price. */
+function priceTolerance(amount: number): number {
+  return Math.max(0.25, amount * 0.03);
+}
+
+function isStablePrice(amounts: number[], level: number): boolean {
+  return amounts.every(
+    (amount) => Math.abs(amount - level) <= priceTolerance(level),
+  );
+}
+
+/**
+ * Finds one clean price change: steady at an old price, then steady at a new
+ * one. Without this, a service would drop off the list the moment it raised its
+ * price, which is exactly when it's most worth seeing.
+ */
+function findPriceChange(amounts: number[]) {
+  for (let split = amounts.length - 1; split >= MIN_CHARGES_AT_OLD_PRICE; split -= 1) {
+    const before = amounts.slice(0, split);
+    const after = amounts.slice(split);
+    const previous = median(before);
+    const current = median(after);
+    if (
+      isStablePrice(before, previous) &&
+      isStablePrice(after, current) &&
+      Math.abs(current - previous) > priceTolerance(previous) &&
+      Math.abs(current - previous) / previous <= MAX_PRICE_CHANGE
+    ) {
+      return { split, previous, current };
+    }
+  }
+  return null;
+}
+
 function normalizedMerchant(value: string): string {
   return value
     .toLocaleLowerCase()
@@ -222,14 +263,10 @@ export function deriveSubscriptions(
 
     const amounts = ordered.map((entry) => entry.amount);
     const medianAmount = median(amounts);
-    const amountTolerance = Math.max(0.25, medianAmount * 0.03);
-    if (
-      amounts.some(
-        (amount) => Math.abs(amount - medianAmount) > amountTolerance,
-      )
-    ) {
-      continue;
-    }
+    const priceChange = isStablePrice(amounts, medianAmount)
+      ? null
+      : findPriceChange(amounts);
+    if (!isStablePrice(amounts, medianAmount) && !priceChange) continue;
 
     const last = ordered.at(-1)!;
     const next = new Date(last.occurredAt.getTime() + cadence.days * DAY_MS);
@@ -243,7 +280,9 @@ export function deriveSubscriptions(
       continue;
     }
 
+    // After a price change, only the new price says what it costs from here on.
     const averageAmount =
+      priceChange?.current ??
       amounts.reduce((total, amount) => total + amount, 0) / amounts.length;
     const annualized = averageAmount * cadence.perYear;
     const maximumAmountDeviation = Math.max(
@@ -266,12 +305,17 @@ export function deriveSubscriptions(
       lastChargedAt: last.occurredAt.toISOString(),
       nextExpectedAt: next.toISOString(),
       confidence:
+        !priceChange &&
         ordered.length >= Math.max(4, cadence.minimumOccurrences) &&
         maximumAmountDeviation <= Math.max(0.1, medianAmount * 0.01) &&
         maximumIntervalDeviation <= cadence.toleranceDays / 2
           ? "Strong match"
           : "Likely",
       source: "Automatic",
+      previousAmount: priceChange?.previous ?? null,
+      priceChangedAt: priceChange
+        ? ordered[priceChange.split].occurredAt.toISOString()
+        : null,
     });
   }
 
@@ -321,5 +365,152 @@ export function manualSubscriptionInsight(
     nextExpectedAt: next.toISOString(),
     confidence: "Manual",
     source: "Manual",
+    previousAmount: null,
+    priceChangedAt: null,
+  };
+}
+
+export type RecurringBill = {
+  streamKey: string;
+  merchant: string;
+  category: string | null;
+  /** The recent average, since a power bill is never the same twice. */
+  amount: number;
+  occurrences: number;
+  lastChargedAt: string;
+  nextExpectedAt: string;
+};
+
+const BILL_MIN_OCCURRENCES = 3;
+const BILL_TOLERANCE_DAYS = 6;
+const BILL_GRACE_DAYS = 12;
+const BILL_MAX_SWING = 0.6;
+const BILL_AVERAGE_OVER = 3;
+
+function isBillLike(candidate: SubscriptionCandidate): boolean {
+  const detail = candidate.categoryDetailed ?? "";
+  if (detail === "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT") return false;
+  // Internet and phone plans are already counted as subscriptions.
+  if (SUBSCRIPTION_DETAILS.has(detail)) return false;
+  return (
+    candidate.category === "RENT_AND_UTILITIES" ||
+    candidate.category === "LOAN_PAYMENTS" ||
+    detail.includes("INSURANCE")
+  );
+}
+
+function sameDayNextMonth(date: Date): Date {
+  const next = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1, 12),
+  );
+  const lastDay = new Date(
+    Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  next.setUTCDate(Math.min(date.getUTCDate(), lastDay));
+  return next;
+}
+
+/**
+ * Monthly must-pays: rent, loans, utilities, insurance. Subscriptions leave these
+ * out on purpose, but they're the biggest things due, so anything answering
+ * "what will I have left" has to count them. Amounts may swing, unlike a
+ * subscription, as long as the timing holds.
+ */
+export function deriveBills(
+  candidates: SubscriptionCandidate[],
+  now = new Date(),
+): RecurringBill[] {
+  const groups = new Map<string, SubscriptionCandidate[]>();
+  for (const candidate of candidates) {
+    if (
+      !Number.isFinite(candidate.amount) ||
+      candidate.amount <= 0 ||
+      !Number.isFinite(candidate.occurredAt.getTime()) ||
+      !isBillLike(candidate)
+    ) {
+      continue;
+    }
+    const streamKey = subscriptionStreamKey(candidate);
+    if (streamKey.startsWith(":")) continue;
+    groups.set(streamKey, [...(groups.get(streamKey) ?? []), candidate]);
+  }
+
+  const bills: RecurringBill[] = [];
+  for (const [streamKey, entries] of groups) {
+    const ordered = [...entries]
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime())
+      .slice(-MAX_RECENT_OCCURRENCES);
+    if (ordered.length < BILL_MIN_OCCURRENCES) continue;
+
+    const monthly = ordered.slice(1).every((entry, index) => {
+      const days =
+        (entry.occurredAt.getTime() - ordered[index].occurredAt.getTime()) / DAY_MS;
+      return Math.abs(days - 30.4375) <= BILL_TOLERANCE_DAYS;
+    });
+    if (!monthly) continue;
+
+    const amounts = ordered.map((entry) => entry.amount);
+    const typical = median(amounts);
+    if (amounts.some((amount) => Math.abs(amount - typical) > typical * BILL_MAX_SWING)) {
+      continue;
+    }
+
+    const last = ordered.at(-1)!;
+    const due = sameDayNextMonth(last.occurredAt);
+    // A missed month means it ended, not that it's forever overdue.
+    if (now.getTime() > due.getTime() + BILL_GRACE_DAYS * DAY_MS) continue;
+
+    const recent = amounts.slice(-BILL_AVERAGE_OVER);
+    bills.push({
+      streamKey,
+      merchant: last.merchant,
+      category: last.category,
+      amount: recent.reduce((sum, amount) => sum + amount, 0) / recent.length,
+      occurrences: ordered.length,
+      lastChargedAt: last.occurredAt.toISOString(),
+      // Late but expected any day still counts as due, not as paid.
+      nextExpectedAt: new Date(Math.max(due.getTime(), now.getTime())).toISOString(),
+    });
+  }
+  return bills.sort((a, b) => b.amount - a.amount);
+}
+
+export type CardPaymentSchedule = {
+  merchant: string;
+  nextExpectedAt: string;
+};
+
+/**
+ * When the next credit card payment is likely to leave checking. The amount comes
+ * from the card balance, not from past payments, because that's what's owed.
+ */
+export function deriveCardPayment(
+  candidates: SubscriptionCandidate[],
+  now = new Date(),
+): CardPaymentSchedule | null {
+  const payments = candidates
+    .filter(
+      (candidate) =>
+        candidate.categoryDetailed === "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" &&
+        candidate.amount > 0 &&
+        Number.isFinite(candidate.occurredAt.getTime()),
+    )
+    .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime())
+    .slice(-MAX_RECENT_OCCURRENCES);
+  if (payments.length < BILL_MIN_OCCURRENCES) return null;
+
+  const monthly = payments.slice(1).every((entry, index) => {
+    const days =
+      (entry.occurredAt.getTime() - payments[index].occurredAt.getTime()) / DAY_MS;
+    return Math.abs(days - 30.4375) <= BILL_TOLERANCE_DAYS;
+  });
+  if (!monthly) return null;
+
+  const last = payments.at(-1)!;
+  const due = sameDayNextMonth(last.occurredAt);
+  if (now.getTime() > due.getTime() + BILL_GRACE_DAYS * DAY_MS) return null;
+  return {
+    merchant: last.merchant,
+    nextExpectedAt: new Date(Math.max(due.getTime(), now.getTime())).toISOString(),
   };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
-import { EyeOff, LoaderCircle, Trash2, Undo2 } from "lucide-react";
+import { LoaderCircle, Undo2 } from "lucide-react";
 
 import {
   dismissSubscription,
@@ -11,8 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 
 type RuleButtonProps =
-  | { mode: "dismiss"; streamKey: string; ruleId?: never }
-  | { mode: "remove" | "restore"; ruleId: number; streamKey?: never };
+  | { mode: "dismiss"; streamKey: string; merchant: string; ruleId?: never }
+  | { mode: "remove" | "restore"; ruleId: number; merchant: string; streamKey?: never };
 
 export function SubscriptionRuleButton(props: RuleButtonProps) {
   const action = {
@@ -28,30 +28,40 @@ export function SubscriptionRuleButton(props: RuleButtonProps) {
       ) : (
         <input type="hidden" name="ruleId" value={props.ruleId} />
       )}
-      <RuleSubmitButton mode={props.mode} />
+      <RuleSubmitButton mode={props.mode} merchant={props.merchant} />
     </form>
   );
 }
 
-function RuleSubmitButton({ mode }: { mode: RuleButtonProps["mode"] }) {
+function RuleSubmitButton({
+  mode,
+  merchant,
+}: {
+  mode: RuleButtonProps["mode"];
+  merchant: string;
+}) {
   const { pending } = useFormStatus();
-  const labels = {
-    dismiss: "Not a subscription",
-    remove: "Remove",
-    restore: "Restore",
-  } as const;
-  const Icon =
-    mode === "dismiss" ? EyeOff : mode === "restore" ? Undo2 : Trash2;
+  const label = mode === "dismiss" ? `Hide ${merchant}` : `Remove ${merchant}`;
 
+  if (mode === "restore") {
+    return (
+      <Button type="submit" size="sm" variant="ghost" disabled={pending}>
+        {pending ? <LoaderCircle className="animate-spin" /> : <Undo2 />}
+        Show again
+      </Button>
+    );
+  }
   return (
     <Button
       type="submit"
       size="sm"
-      variant={mode === "remove" ? "destructive" : "ghost"}
+      variant="ghost"
+      className="text-muted-foreground"
       disabled={pending}
+      aria-label={label}
     >
-      {pending ? <LoaderCircle className="animate-spin" /> : <Icon />}
-      {pending ? "Saving…" : labels[mode]}
+      {pending ? <LoaderCircle className="animate-spin" /> : null}
+      {mode === "dismiss" ? "Hide" : "Remove"}
     </Button>
   );
 }

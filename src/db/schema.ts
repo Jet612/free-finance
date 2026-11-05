@@ -109,6 +109,8 @@ export const accounts = pgTable(
       scale: 4,
     }),
     connected: boolean().notNull().default(true),
+    // The owner can leave an account out, like one they share or manage for someone.
+    inNetWorth: boolean("in_net_worth").notNull().default(true),
     lastSyncedAt: timestamp("last_synced_at", {
       withTimezone: true,
       mode: "date",
@@ -188,6 +190,10 @@ export const transactions = pgTable(
     logoUrl: text("logo_url"),
     website: text(),
     rawData: jsonb("raw_data").notNull().default({}),
+    // Set when the owner picks a category, so the daily sync won't overwrite it.
+    categoryLocked: boolean("category_locked").notNull().default(false),
+    // Left out of income, spending, and budgets at the owner's request.
+    ignored: boolean().notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
@@ -209,6 +215,18 @@ export const transactions = pgTable(
     ),
   ],
 );
+
+/** "Always file this merchant under this category", applied on every sync. */
+export const merchantRules = pgTable("merchant_rules", {
+  merchant: text().primaryKey(),
+  categoryPrimary: text("category_primary").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+    .notNull()
+    .defaultNow(),
+});
 
 export const budgets = pgTable(
   "budgets",

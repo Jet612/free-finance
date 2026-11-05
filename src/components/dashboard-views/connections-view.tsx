@@ -9,121 +9,81 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import { PageHeader } from "@/components/page-header";
+import { Money } from "@/components/money";
+import { PageHeader, Panel, SectionHeading } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import type { ConnectionRow, ConnectionsData } from "@/lib/data";
-import { formatCurrency, formatDateTime, titleCase } from "@/lib/format";
+import { accountTypeLabel, formatDateTime, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const stateBadges: Record<
+const STATES: Record<
   ConnectionRow["state"],
   { label: string; icon: typeof Check; className: string }
 > = {
-  connected: {
-    label: "Connected",
-    icon: Check,
-    className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  },
-  importing: {
-    label: "Importing…",
-    icon: LoaderCircle,
-    className: "bg-primary/10 text-primary",
-  },
-  "needs-reconnect": {
-    label: "Needs you to sign in",
-    icon: TriangleAlert,
-    className: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  },
-  trouble: {
-    label: "Having trouble",
-    icon: CircleDashed,
-    className: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  },
+  connected: { label: "Connected", icon: Check, className: "text-positive" },
+  importing: { label: "Importing", icon: LoaderCircle, className: "text-muted-foreground" },
+  "needs-reconnect": { label: "Needs you to sign in", icon: TriangleAlert, className: "text-negative" },
+  trouble: { label: "Having trouble", icon: CircleDashed, className: "text-warning" },
 };
 
-function ConnectionCard({
+function ConnectionItem({
   connection,
   actions,
 }: {
   connection: ConnectionRow;
   actions: ReactNode;
 }) {
-  const badge = stateBadges[connection.state];
+  const state = STATES[connection.state];
   return (
-    <Card className="shadow-none">
-      <CardHeader className="border-b">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="truncate">
-              {connection.institutionName}
-            </CardTitle>
-            <CardDescription className="mt-1">
-              {connection.lastSuccessAt
-                ? `Updated ${formatDateTime(connection.lastSuccessAt)}`
-                : "Bringing in your accounts. This usually takes about a minute."}
-            </CardDescription>
-          </div>
-          <Badge variant="secondary" className={cn("hover:bg-inherit", badge.className)}>
-            <badge.icon
-              className={cn(connection.state === "importing" && "animate-spin")}
-            />
-            {badge.label}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {connection.message && (
-          <p className="text-sm leading-6 text-amber-700 dark:text-amber-400">
-            {connection.message}
+    <li className="px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <h3 className="truncate text-[0.9375rem] font-semibold">{connection.institutionName}</h3>
+          <p className="text-[0.8125rem] leading-[1.125rem] text-muted-foreground">
+            {connection.lastSuccessAt
+              ? `Updated ${formatDateTime(connection.lastSuccessAt)}`
+              : "Bringing in your accounts. This usually takes about a minute."}
           </p>
-        )}
-        {connection.accounts.length > 0 && (
-          <div className="divide-y">
-            {connection.accounts.map((account) => (
-              <div
-                key={`${account.name}-${account.mask}`}
-                className="flex items-center justify-between gap-4 py-2.5 first:pt-0"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {account.name}
-                    {account.mask && (
-                      <span className="ml-1.5 font-normal text-muted-foreground">
-                        ··{account.mask}
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {titleCase(account.type)}
-                  </p>
-                </div>
-                <p className="shrink-0 font-mono text-sm font-medium tabular-nums">
-                  {formatCurrency(account.balance)}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-        {actions}
-      </CardContent>
-    </Card>
+        </div>
+        <p className={cn("inline-flex items-center gap-1.5 text-[0.8125rem] font-medium", state.className)}>
+          <state.icon
+            className={cn("size-3.5", connection.state === "importing" && "animate-spin")}
+            aria-hidden="true"
+          />
+          {state.label}
+        </p>
+      </div>
+      {connection.message && (
+        <p className="mt-2 text-sm leading-6 text-negative">{connection.message}</p>
+      )}
+      {connection.accounts.length > 0 && (
+        <ul className="mt-3 grid grid-cols-1 gap-1">
+          {connection.accounts.map((account) => (
+            <li
+              key={`${account.name}-${account.mask}`}
+              className="flex items-baseline justify-between gap-4 text-sm"
+            >
+              <span className="min-w-0 truncate">
+                {account.name}
+                <span className="text-muted-foreground">
+                  {account.mask && ` ending ${account.mask}`}, {accountTypeLabel(account.type)}
+                </span>
+              </span>
+              <Money value={account.balance} className="tnum shrink-0" />
+            </li>
+          ))}
+        </ul>
+      )}
+      {actions && <div className="mt-1.5">{actions}</div>}
+    </li>
   );
 }
 
-const reassurances = [
+const REASSURANCES = [
   {
     icon: LockKeyhole,
     title: "Your bank password stays with your bank",
-    detail:
-      "You sign in on Plaid's secure page. This app never sees or stores your password.",
+    detail: "You sign in on Plaid's secure page. This app never sees or stores your password.",
   },
   {
     icon: EyeOff,
@@ -133,8 +93,7 @@ const reassurances = [
   {
     icon: CalendarClock,
     title: "Updates once a day",
-    detail:
-      "Your accounts refresh automatically every morning, with no need to keep anything open.",
+    detail: "Your accounts refresh every morning, with no need to keep anything open.",
   },
 ];
 
@@ -150,89 +109,113 @@ export function ConnectionsView({
   notice?: ReactNode;
 }) {
   const empty = data.connections.length === 0;
+  const needsAttention = data.connections.filter(
+    (item) => item.state === "needs-reconnect" || item.state === "trouble",
+  ).length;
 
   return (
-    <div className="grid gap-6 lg:gap-8">
-      <PageHeader title="Connections" />
+    <div className="grid grid-cols-1 gap-8">
+      <PageHeader
+        title={
+          empty
+            ? "Connect your first account"
+            : needsAttention
+              ? `${plural(needsAttention, "connection")} ${needsAttention === 1 ? "needs" : "need"} you`
+              : "All connections are working"
+        }
+        detail={
+          empty
+            ? "Choose what to connect, then sign in on Plaid's secure page. It takes about two minutes."
+            : `${plural(data.connections.length, "institution")} connected.`
+        }
+      />
       {notice}
 
       {data.issues.map((issue) => (
-        <Alert key={issue.key} className="border-amber-500/40 bg-amber-500/5">
-          <TriangleAlert className="text-amber-600 dark:text-amber-400" />
+        <Alert key={issue.key} className="border-warning/40">
+          <TriangleAlert className="text-warning" />
           <AlertTitle>{issue.title}</AlertTitle>
-          <AlertDescription>{issue.detail}</AlertDescription>
+          <AlertDescription>
+            {issue.detail}
+            {issue.key === "plaid" && (
+              <span className="mt-1 flex flex-wrap gap-x-4">
+                <a
+                  href="https://dashboard.plaid.com/developers/keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium underline underline-offset-3"
+                >
+                  Find your Plaid keys
+                </a>
+                <a
+                  href="https://vercel.com/dashboard"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium underline underline-offset-3"
+                >
+                  Open Vercel
+                </a>
+              </span>
+            )}
+          </AlertDescription>
         </Alert>
       ))}
 
       {data.unmanagedAccounts > 0 && (
-        <Alert className="border-amber-500/40 bg-amber-500/5">
-          <TriangleAlert className="text-amber-600 dark:text-amber-400" />
+        <Alert className="border-warning/40">
+          <TriangleAlert className="text-warning" />
           <AlertTitle>
-            {data.unmanagedAccounts} account
-            {data.unmanagedAccounts === 1 ? " isn't" : "s aren't"} updating
+            {plural(data.unmanagedAccounts, "account")}{" "}
+            {data.unmanagedAccounts === 1 ? "isn't" : "aren't"} updating
           </AlertTitle>
           <AlertDescription>
-            {data.unmanagedAccounts === 1 ? "It was" : "They were"} connected by
-            an earlier version of this app. To keep{" "}
-            {data.unmanagedAccounts === 1 ? "it" : "them"} updating, follow
-            &ldquo;Upgrading an older install&rdquo; in the README.
+            {data.unmanagedAccounts === 1 ? "It was" : "They were"} connected by an
+            earlier version of this app. To keep {data.unmanagedAccounts === 1 ? "it" : "them"} updating,
+            follow &ldquo;Upgrading an older install&rdquo; in the README.
           </AlertDescription>
         </Alert>
       )}
 
-      {empty ? (
-        <Card className="shadow-none">
-          <CardHeader>
-            <CardTitle className="text-base">
-              Connect your first account
-            </CardTitle>
-            <CardDescription>
-              Choose what to connect, then sign in to it on Plaid&apos;s secure
-              page. It takes about two minutes.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>{addControls}</CardContent>
-        </Card>
-      ) : (
-        <>
-          <section className="grid gap-4 lg:grid-cols-2">
-            {data.connections.map((connection) => (
-              <ConnectionCard
-                key={connection.id}
-                connection={connection}
-                actions={renderActions(connection)}
-              />
-            ))}
-          </section>
-          <Card className="shadow-none">
-            <CardHeader>
-              <CardTitle>Add another</CardTitle>
-              <CardDescription>
-                Investment accounts include Robinhood, Fidelity, and other
-                brokerages.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>{addControls}</CardContent>
-          </Card>
-        </>
+      {!empty && (
+        <section aria-labelledby="connections-heading">
+          <h2 id="connections-heading" className="sr-only">Your connections</h2>
+          <Panel>
+            <ul className="divide-y">
+              {data.connections.map((connection) => (
+                <ConnectionItem
+                  key={connection.id}
+                  connection={connection}
+                  actions={renderActions(connection)}
+                />
+              ))}
+            </ul>
+          </Panel>
+        </section>
       )}
 
-      <section className="grid gap-4 md:grid-cols-3">
-        {reassurances.map((item) => (
-          <div key={item.title} className="flex gap-3">
+      <section aria-labelledby="add-heading">
+        <SectionHeading
+          title={<span id="add-heading">{empty ? "Choose what to connect" : "Add another"}</span>}
+          detail="Investment accounts include Robinhood, Fidelity, and other brokerages."
+        />
+        {addControls}
+      </section>
+
+      <ul className="grid gap-5 md:grid-cols-3">
+        {REASSURANCES.map((item) => (
+          <li key={item.title} className="flex gap-3">
             <item.icon
-              className="mt-0.5 size-4 shrink-0 text-primary"
+              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
               strokeWidth={1.8}
+              aria-hidden="true"
             />
             <div>
               <p className="text-sm font-medium">{item.title}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {item.detail}
-              </p>
+              <p className="mt-1 text-[0.8125rem] leading-5 text-muted-foreground">{item.detail}</p>
             </div>
-          </div>
+          </li>
         ))}
-      </section>
+      </ul>
     </div>
   );
 }

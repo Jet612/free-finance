@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 
 import { DashboardShell } from "@/components/dashboard-shell";
+import { getMockStaleConnections } from "@/lib/demo-data";
 
 const description =
   "Explore the real Free Finance dashboard with safe, realistic sample data.";
@@ -46,5 +47,9 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default function DemoLayout({ children }: { children: React.ReactNode }) {
-  return <DashboardShell demo>{children}</DashboardShell>;
+  return (
+    <DashboardShell demo staleConnections={getMockStaleConnections()}>
+      {children}
+    </DashboardShell>
+  );
 }

@@ -103,7 +103,7 @@ export function LoginForm() {
         {pending === "passkey" ? "Waiting for passkey" : "Use a passkey"}
       </Button>
 
-      <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
+      <div className="flex items-center gap-3 text-[0.8125rem] text-muted-foreground">
         <span className="h-px flex-1 bg-border" />
         or use password
         <span className="h-px flex-1 bg-border" />
@@ -166,7 +166,7 @@ export function LoginForm() {
       )}
 
       {!passkeySupported && (
-        <p className="text-center text-xs leading-5 text-muted-foreground">
+        <p className="text-center text-[0.8125rem] leading-5 text-muted-foreground">
           This browser does not expose passkeys. Password sign-in remains
           available.
         </p>

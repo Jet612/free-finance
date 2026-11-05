@@ -27,7 +27,7 @@ export function MfaChallenge() {
       if (!active) return;
       if (error || !data.totp.length) {
         setMessage(
-          "No verified authenticator is available. Use Supabase to recover this account.",
+          "This account has no authenticator app set up. If you lost it, it can be reset from the project you set this app up with.",
         );
         setLoading(false);
         return;
@@ -73,8 +73,7 @@ export function MfaChallenge() {
       <div className="flex items-start gap-3 rounded-xl border bg-muted/30 p-4">
         <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
         <p className="text-sm leading-6 text-muted-foreground">
-          This account opted into TOTP. Enter a current code to finish signing
-          in.
+          Enter the 6-digit code from your authenticator app to finish signing in.
         </p>
       </div>
 
@@ -113,7 +112,7 @@ export function MfaChallenge() {
               maxLength={6}
               autoFocus
               required
-              className="h-12 text-center font-mono text-lg tracking-[0.35em]"
+              className="tnum h-12 text-center text-lg tracking-[0.35em]"
             />
           </div>
           <Button
