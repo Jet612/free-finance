@@ -52,7 +52,9 @@ export function NetWorthChart({ data }: { data: TrendPoint[] }) {
   const visibleData = useMemo(() => {
     if (!data.length) return data;
     const days = range === "30D" ? 30 : range === "90D" ? 90 : 365;
-    const cutoff = new Date();
+    // Counted back from the newest point, not today, so a gap in updates can't
+    // leave the chart empty.
+    const cutoff = new Date(`${data[data.length - 1].date}T00:00:00Z`);
     cutoff.setUTCDate(cutoff.getUTCDate() - days);
     const cutoffDate = cutoff.toISOString().slice(0, 10);
     return data.filter((point) => point.date >= cutoffDate);
@@ -61,7 +63,7 @@ export function NetWorthChart({ data }: { data: TrendPoint[] }) {
   if (!data.length) {
     return (
       <ChartEmptyState
-        title="Your trend starts after the first sync"
+        title="Your trend starts after the first update"
         detail="Daily snapshots will build a private net worth history here."
       />
     );
@@ -162,7 +164,7 @@ export function SpendingChart({ data }: { data: SpendingPoint[] }) {
     return (
       <ChartEmptyState
         title="No spending yet"
-        detail="Categorized Plaid transactions from the last 30 days appear here."
+        detail="Your spending will show up here by category."
       />
     );
   }

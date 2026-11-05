@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import * as schema from "@/db/schema";
+import { databaseSsl, databaseUrl } from "@/lib/app-config";
 
 type Database = ReturnType<typeof drizzle<typeof schema>>;
 
@@ -13,9 +14,9 @@ let sqlClient: ReturnType<typeof postgres> | undefined;
 export function getDb(): Database {
   if (database) return database;
 
-  const connectionString = process.env.DATABASE_URL;
+  const connectionString = databaseUrl();
   if (!connectionString) {
-    throw new Error("DATABASE_URL is not configured.");
+    throw new Error("The database connection is not configured.");
   }
 
   // Supabase's port 6543 transaction pooler cannot retain prepared statements.
@@ -24,6 +25,7 @@ export function getDb(): Database {
     // lets an abandoned dev render block every later query behind one socket.
     max: 4,
     prepare: false,
+    ssl: databaseSsl(connectionString),
     idle_timeout: 20,
     connect_timeout: 15,
     max_lifetime: 60 * 5,

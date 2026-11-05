@@ -17,11 +17,12 @@ export default function ErrorPage({
           <TriangleAlert className="size-5" />
         </span>
         <h1 className="mt-5 text-2xl font-semibold tracking-tight">
-          The dashboard could not load
+          Something went wrong
         </h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Confirm the database connection and migration, then try again. No
-          provider credentials are involved in rendering this page.
+          Your dashboard couldn&apos;t load. Please try again in a moment. If
+          this keeps happening, check that Supabase is connected in your Vercel
+          project.
         </p>
         <Button onClick={reset} className="mt-5">
           Try again

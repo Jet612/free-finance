@@ -63,7 +63,7 @@ export function SubscriptionAddForm({
         <div>
           <CardTitle>Add from a transaction</CardTitle>
           <CardDescription className="mt-1">
-            Choose a synced debit and tell Free Finance how often it renews.
+            Pick a past charge and say how often it renews.
           </CardDescription>
         </div>
         <Button
@@ -146,7 +146,7 @@ export function SubscriptionAddForm({
           </form>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Sync at least one debit transaction before adding a subscription.
+            Charges will appear here once an account has updated.
           </p>
         )}
       </CardContent>

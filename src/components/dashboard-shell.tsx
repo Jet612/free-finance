@@ -35,7 +35,7 @@ export function DashboardShell({
             ) : (
               <LockKeyhole className="size-3.5 text-primary" />
             )}
-            {demo ? "Sample data · not saved" : "Private · server-only data"}
+            {demo ? "Sample data · not saved" : "Private to you"}
           </div>
           {demo ? (
             <Button
@@ -63,7 +63,7 @@ export function DashboardShell({
           <div className="flex items-center gap-1">
             <span className="mr-2 hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
               <span className="size-1.5 rounded-full bg-emerald-500" />
-              {demo ? "Demo instance" : "Personal instance"}
+              {demo ? "Demo" : "Your dashboard"}
             </span>
             <ThemeToggle />
           </div>

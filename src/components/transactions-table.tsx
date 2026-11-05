@@ -620,7 +620,7 @@ function TransactionDetails({ transaction }: { transaction: TransactionRow }) {
           <DetailRow label="Account type" value={accountType} />
         </DetailSection>
 
-        <DetailSection title="Provider">
+        <DetailSection title="Bank details">
           <DetailRow
             label="Source"
             value={titleCase(transaction.accountSource)}

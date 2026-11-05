@@ -45,7 +45,7 @@ export function DemoSyncNowButton() {
         aria-describedby="demo-sync-status"
       >
         {synced ? <Check className="size-3.5" /> : <RefreshCw className="size-3.5" />}
-        {synced ? "Up to date" : "Sync now"}
+        {synced ? "Up to date" : "Refresh"}
       </Button>
       <div
         id="demo-sync-status"

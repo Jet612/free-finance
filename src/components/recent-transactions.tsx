@@ -21,7 +21,7 @@ export function RecentTransactions({
           <ReceiptText className="mx-auto size-6 text-muted-foreground" />
           <p className="mt-3 text-sm font-medium">No transactions yet</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Your latest Plaid activity will appear after the first sync.
+            Your latest activity will appear after the first update.
           </p>
         </div>
       </div>

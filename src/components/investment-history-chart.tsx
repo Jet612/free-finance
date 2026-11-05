@@ -57,11 +57,10 @@ export function InvestmentHistoryChart({
       <div className="flex h-[300px] items-center justify-center rounded-xl border border-dashed bg-muted/20 px-8 text-center">
         <div>
           <p className="text-sm font-medium">
-            Unrealized gain/loss history starts after the next sync
+            Your gain and loss history starts after the next update
           </p>
           <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-            Each investment sync records the exact total market value and cost
-            basis for this graph.
+            A new point is added every day, showing what your investments were worth compared to what you paid.
           </p>
         </div>
       </div>

@@ -18,10 +18,10 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import {
+  assetTypeLabel,
   formatCompactCurrency,
   formatCurrency,
   formatPercent,
-  titleCase,
 } from "@/lib/format";
 
 const chartColors = [
@@ -64,7 +64,7 @@ export function InvestmentAllocationChart({
 
   const chartData = data.map((item, index) => ({
     ...item,
-    label: titleCase(item.type),
+    label: assetTypeLabel(item.type),
     fill: chartColors[index % chartColors.length],
   }));
 
@@ -191,7 +191,7 @@ export function HoldingsValueChart({ data }: { data: Holdings }) {
                   </div>
                   {item.payload.gain != null ? (
                     <div className="flex justify-between gap-4 text-muted-foreground">
-                      <span>Unrealized gain</span>
+                      <span>Gain or loss</span>
                       <span className="font-mono tabular-nums">
                         {formatCurrency(Number(item.payload.gain))} ·{" "}
                         {formatPercent(Number(item.payload.gainPercent))}
@@ -220,7 +220,7 @@ function InvestmentChartEmptyState() {
       <div>
         <p className="text-sm font-medium">No holdings to chart yet</p>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          Synced investment positions will appear here.
+          Your investments will appear here after the next update.
         </p>
       </div>
     </div>

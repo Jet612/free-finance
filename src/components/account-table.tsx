@@ -23,10 +23,10 @@ export function AccountTable({ accounts }: { accounts: AccountRow[] }) {
       <div className="flex min-h-48 items-center justify-center rounded-xl border border-dashed bg-muted/20 px-8 text-center">
         <div>
           <Landmark className="mx-auto size-6 text-muted-foreground" />
-          <p className="mt-3 text-sm font-medium">No accounts synced</p>
+          <p className="mt-3 text-sm font-medium">No accounts yet</p>
           <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-            Complete Plaid Link, then run the sync workflow to populate this
-            table.
+            Add a bank or investment account on the Connections page and it will
+            appear here.
           </p>
         </div>
       </div>
@@ -40,7 +40,7 @@ export function AccountTable({ accounts }: { accounts: AccountRow[] }) {
           <TableRow className="bg-muted/40 hover:bg-muted/40">
             <TableHead>Account</TableHead>
             <TableHead className="hidden md:table-cell">Type</TableHead>
-            <TableHead className="hidden lg:table-cell">Last sync</TableHead>
+            <TableHead className="hidden lg:table-cell">Last updated</TableHead>
             <TableHead className="text-right">Balance</TableHead>
             <TableHead className="w-10">
               <span className="sr-only">Status</span>
@@ -53,7 +53,7 @@ export function AccountTable({ accounts }: { accounts: AccountRow[] }) {
               <TableCell>
                 <div className="flex items-center gap-3">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                    {account.source === "robinhood" ? (
+                    {account.accountType === "investment" ? (
                       <LineChart className="size-4" />
                     ) : (
                       <Landmark className="size-4" />

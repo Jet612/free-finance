@@ -18,6 +18,9 @@ export function TransactionsView({ data }: { data: TransactionsData }) {
         { label: "Pending", value: formatCurrency(data.metrics.pending), detail: "Not included in posted totals", icon: Clock3 },
       ]} />
       <Card className="py-0 shadow-none"><TransactionsTable transactions={data.transactions} categories={data.categories} accounts={data.accounts} periodStarts={data.periodStarts} /></Card>
+      {data.totalCount > data.transactions.length && (
+        <p className="text-xs text-muted-foreground">Showing your {data.transactions.length.toLocaleString("en-US")} most recent of {data.totalCount.toLocaleString("en-US")} transactions. Filters and search only cover the ones shown here.</p>
+      )}
     </div>
   );
 }

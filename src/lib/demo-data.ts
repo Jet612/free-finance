@@ -7,7 +7,7 @@ import type {
   TransactionRow,
   TransactionsData,
 } from "@/lib/detail-data";
-import type { DashboardData, SetupData } from "@/lib/data";
+import type { ConnectionsData, DashboardData } from "@/lib/data";
 
 const accounts = [
   {
@@ -15,6 +15,7 @@ const accounts = [
     institutionName: "Mercury Community",
     name: "Everyday checking",
     type: "checking",
+    accountType: "depository",
     mask: "2481",
     source: "plaid",
     balance: 8632.44,
@@ -27,6 +28,7 @@ const accounts = [
     institutionName: "Clearwater Bank",
     name: "High-yield savings",
     type: "savings",
+    accountType: "depository",
     mask: "6012",
     source: "plaid",
     balance: 20648.72,
@@ -39,6 +41,7 @@ const accounts = [
     institutionName: "Summit Credit",
     name: "Rewards card",
     type: "credit card",
+    accountType: "credit",
     mask: "7730",
     source: "plaid",
     balance: -1260.38,
@@ -51,8 +54,9 @@ const accounts = [
     institutionName: "Northstar Investing",
     name: "Individual brokerage",
     type: "brokerage",
+    accountType: "investment",
     mask: "9824",
-    source: "robinhood",
+    source: "plaid",
     balance: 42180.16,
     availableBalance: null,
     connected: true,
@@ -63,8 +67,9 @@ const accounts = [
     institutionName: "Northstar Investing",
     name: "Roth IRA",
     type: "ira",
+    accountType: "investment",
     mask: "1809",
-    source: "robinhood",
+    source: "plaid",
     balance: 22183.06,
     availableBalance: null,
     connected: true,
@@ -265,10 +270,14 @@ export const mockDashboardData: DashboardData = {
     netWorth: 92384,
     netWorthChange: 8732,
     netWorthChangePercent: 10.43,
+    netWorthChangeSince: "2026-05-03",
     monthlyCashFlow: 4759,
     monthlyIncome: 4850,
     monthlySpending: 91,
     investmentValue: 64363,
+    cashOnHand: 29069.9,
+    moneyOwed: 1260.38,
+    spentByThisPointLastMonth: 148.5,
   },
   trend: [
     { date: "2025-09-01", value: 76620 },
@@ -303,13 +312,22 @@ export const mockDashboardData: DashboardData = {
     accountName: item.accountName,
     pending: item.pending,
   })),
-  lastSuccessfulSync: "2026-08-01T18:42:00-04:00",
-  completedSyncAt: "2026-08-01T18:42:00-04:00",
-  failedSyncAt: null,
+  upcomingBills: [
+    { merchant: "Harbor Fitness", amount: 59, expectedAt: "2026-08-15" },
+    { merchant: "Netflix", amount: 22.99, expectedAt: "2026-08-20" },
+    { merchant: "Spotify", amount: 11.99, expectedAt: "2026-08-30" },
+  ],
+  health: {
+    hasConnections: true,
+    lastUpdatedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    stale: false,
+    attention: [],
+  },
 };
 
 export const mockTransactionsData: TransactionsData = {
   transactions,
+  totalCount: transactions.length,
   categories: [
     "ENTERTAINMENT",
     "FOOD_AND_DRINK",
@@ -344,7 +362,29 @@ export const mockAccountsData: AccountsData = {
   },
 };
 
+const demoHoldings = [
+  { symbol: "VTI", name: "Total Stock Market ETF", assetType: "etf", quantity: 98.4, price: 301.2, value: 29638.08, costBasis: 24900 },
+  { symbol: "VXUS", name: "Total International Stock ETF", assetType: "etf", quantity: 180, price: 66.1, value: 11898, costBasis: 10800 },
+  { symbol: "BND", name: "Total Bond Market ETF", assetType: "fixed income", quantity: 110, price: 74.4, value: 8184, costBasis: 8250 },
+  { symbol: "AAPL", name: "Apple Inc.", assetType: "equity", quantity: 30, price: 219.2, value: 6576, costBasis: 5400 },
+  { symbol: "MSFT", name: "Microsoft Corp.", assetType: "equity", quantity: 12, price: 412.5, value: 4950, costBasis: 4683.9 },
+  { symbol: "USD", name: "Cash", assetType: "cash", quantity: 3117.14, price: 1, value: 3117.14, costBasis: 3117.14 },
+];
+const demoHoldingsTotal = demoHoldings.reduce((sum, item) => sum + item.value, 0);
+
 export const mockInvestmentsData: InvestmentsData = {
+  holdings: demoHoldings.map((item) => ({
+    ...item,
+    gain: item.value - item.costBasis,
+    gainPercent: ((item.value - item.costBasis) / item.costBasis) * 100,
+    share: (item.value / demoHoldingsTotal) * 100,
+  })),
+  allocation: [
+    { type: "etf", value: 41536.08, percent: 64.53 },
+    { type: "equity", value: 11526, percent: 17.91 },
+    { type: "fixed income", value: 8184, percent: 12.72 },
+    { type: "cash", value: 3117.14, percent: 4.84 },
+  ],
   accounts: [
     {
       id: 4,
@@ -389,6 +429,7 @@ export const mockInvestmentsData: InvestmentsData = {
     gain: 7212.18,
     gainPercent: 12.62,
     accounts: 2,
+    gainIsPartial: false,
   },
 };
 
@@ -523,7 +564,11 @@ export function getMockSpendingData(requestedMonth?: string): SpendingData {
     { category: "GENERAL_MERCHANDISE", value: 389 },
     { category: "ENTERTAINMENT", value: 158 },
     { category: "MEDICAL", value: 140 },
-  ].map((item) => ({ ...item, value: item.value * selectedScale }));
+  ].map((item) => ({
+    ...item,
+    value: item.value * selectedScale,
+    previous: item.value * selectedScale * 1.06,
+  }));
   const spending = categories.reduce((sum, item) => sum + item.value, 0);
   const income = 4868.72;
 
@@ -532,40 +577,41 @@ export function getMockSpendingData(requestedMonth?: string): SpendingData {
     availableMonths,
     monthly: monthlyBase,
     categories,
+    topMerchants: [
+      { merchant: "Lakeside Apartments", value: 1650, count: 1 },
+      { merchant: "Whole Foods", value: 412.36, count: 7 },
+      { merchant: "Shell", value: 186.2, count: 4 },
+      { merchant: "Amazon", value: 164.75, count: 5 },
+      { merchant: "Blue Bottle Coffee", value: 58.5, count: 9 },
+    ],
     metrics: {
       income,
       spending,
       net: income - spending,
       topCategory: categories[0],
+      savingsRate: ((income - spending) / income) * 100,
+      averageSpending: 4059.4,
     },
   };
 }
 
-export const mockSetupData: SetupData = {
-  database: "connected",
-  sources: [
-    {
-      source: "plaid",
-      status: "connected",
-      label: "Plaid institutions",
-      lastAttemptAt: "2026-08-01T18:42:00-04:00",
-      lastSuccessAt: "2026-08-01T18:42:00-04:00",
-      lastError: null,
-      accounts: 3,
-      connections: 3,
-      institutions: ["Clearwater Bank", "Mercury Community", "Summit Credit"],
-    },
-    {
-      source: "robinhood",
-      status: "connected",
-      label: "Robinhood",
-      lastAttemptAt: "2026-08-01T18:41:00-04:00",
-      lastSuccessAt: "2026-08-01T18:41:00-04:00",
-      lastError: null,
-      accounts: 2,
-      connections: 1,
-      institutions: ["Northstar Investing"],
-    },
-  ],
-  totalAccounts: 5,
+export const mockConnectionsData: ConnectionsData = {
+  issues: [],
+  unmanagedAccounts: 0,
+  connections: [
+    { id: 1, institutionName: "Clearwater Bank", state: "connected" as const, accountIds: [2] },
+    { id: 2, institutionName: "Mercury Community", state: "connected" as const, accountIds: [1] },
+    { id: 3, institutionName: "Northstar Investing", state: "connected" as const, accountIds: [4, 5] },
+    { id: 4, institutionName: "Summit Credit", state: "needs-reconnect" as const, accountIds: [3] },
+  ].map(({ accountIds, ...connection }) => ({
+    ...connection,
+    message:
+      connection.state === "needs-reconnect"
+        ? `${connection.institutionName} needs you to sign in again. Choose Reconnect to fix it.`
+        : null,
+    lastSuccessAt: "2026-08-01T18:42:00-04:00",
+    accounts: accounts
+      .filter((account) => accountIds.includes(account.id))
+      .map(({ name, mask, type, balance }) => ({ name, mask, type, balance })),
+  })),
 };

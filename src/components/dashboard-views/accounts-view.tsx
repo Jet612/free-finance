@@ -15,9 +15,9 @@ export function AccountsView({ data }: { data: AccountsData }) {
         { label: "Total assets", value: formatCurrency(data.metrics.assets), icon: WalletCards },
         { label: "Liabilities", value: formatCurrency(data.metrics.liabilities), icon: CircleDollarSign, tone: data.metrics.liabilities ? "negative" : "default" },
         { label: "Available cash", value: formatCurrency(data.metrics.availableCash), icon: Landmark },
-        { label: "Connected", value: `${data.metrics.connected} accounts`, detail: "Included in current net worth", icon: ShieldCheck },
+        { label: "Connected", value: `${data.metrics.connected} account${data.metrics.connected === 1 ? "" : "s"}`, detail: "Included in your net worth", icon: ShieldCheck },
       ]} />
-      <Card className="shadow-none"><CardHeader className="border-b"><CardTitle>Connected accounts</CardTitle><CardDescription>Balances refresh with each provider sync; history remains one end-of-day snapshot per account.</CardDescription></CardHeader><CardContent><AccountTable accounts={data.accounts} /></CardContent></Card>
+      <Card className="shadow-none"><CardHeader className="border-b"><CardTitle>Connected accounts</CardTitle><CardDescription>Balances update automatically once a day.</CardDescription></CardHeader><CardContent><AccountTable accounts={data.accounts} /></CardContent></Card>
     </div>
   );
 }

@@ -8,13 +8,22 @@ import { LoginForm } from "@/components/login-form";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { hasSession } from "@/lib/auth";
+import { databaseUrl } from "@/lib/app-config";
+import { hasOwner, hasSession } from "@/lib/auth";
 
 export const metadata: Metadata = {
   title: "Sign in",
 };
 
 export default async function LoginPage() {
+  // A deployment nobody has claimed yet has nothing to sign in to.
+  const supabaseReady = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+  );
+  if (!supabaseReady || !databaseUrl() || !(await hasOwner())) {
+    redirect("/welcome");
+  }
   if (await hasSession()) redirect("/");
   const appName = process.env.APP_NAME ?? "Free Finance";
 
@@ -34,8 +43,8 @@ export default async function LoginPage() {
               Your money, in your database.
             </p>
             <p className="mt-4 max-w-sm text-sm leading-6 text-muted-foreground">
-              A single-tenant view of cash, spending, and investments. Provider
-              credentials never reach the browser.
+              A private view of your cash, spending, and investments. Your bank
+              password never touches this app.
             </p>
           </div>
           <div className="grid gap-3 text-xs text-muted-foreground">
@@ -45,7 +54,7 @@ export default async function LoginPage() {
             </div>
             <div className="flex items-center gap-2">
               <Database className="size-4 text-primary" />
-              Supabase PostgreSQL under your control
+              Stored in a database only you control
             </div>
           </div>
         </section>
@@ -62,7 +71,7 @@ export default async function LoginPage() {
               Welcome back
             </h1>
             <p className="text-sm leading-6 text-muted-foreground">
-              Sign in to this private finance instance.
+              Sign in to your private dashboard.
             </p>
           </CardHeader>
           <CardContent>

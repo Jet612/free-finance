@@ -10,6 +10,12 @@ import {
   safePlaidLogoUrl,
 } from "@/lib/external-url";
 import {
+  COUNTS_AS_CASH_FLOW,
+  INCOME_TOTAL,
+  IS_INCOME,
+  SPENDING_TOTAL,
+} from "@/lib/finance-sql";
+import {
   deriveSubscriptions,
   manualSubscriptionInsight,
   subscriptionStreamKey,
@@ -17,6 +23,12 @@ import {
   type SubscriptionCandidate,
   type SubscriptionInsight,
 } from "@/lib/subscription-detection";
+import {
+  appTimeZone,
+  monthStartInAppTimezone,
+  subtractDays,
+  todayInAppTimezone,
+} from "@/lib/timezone";
 
 type Row = Record<string, unknown>;
 
@@ -27,38 +39,6 @@ function numberValue(value: unknown): number {
 
 function stringValue(value: unknown): string {
   return value == null ? "" : String(value);
-}
-
-function monthStartInAppTimezone(): string {
-  const timeZone = process.env.APP_TIMEZONE ?? "America/New_York";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    timeZone,
-  }).formatToParts(new Date());
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  return `${year}-${month}-01`;
-}
-
-function todayInAppTimezone(): string {
-  const timeZone = process.env.APP_TIMEZONE ?? "America/New_York";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone,
-  }).formatToParts(new Date());
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  return `${year}-${month}-${day}`;
-}
-
-function subtractDays(date: string, days: number): string {
-  const shifted = new Date(`${date}T00:00:00Z`);
-  shifted.setUTCDate(shifted.getUTCDate() - days);
-  return shifted.toISOString().slice(0, 10);
 }
 
 export type TransactionRow = {
@@ -92,8 +72,13 @@ export type TransactionRow = {
   updatedAt: string;
 };
 
+/** Enough for years of normal use, while keeping the page quick to load. */
+const TRANSACTION_LIMIT = 750;
+
 export type TransactionsData = {
   transactions: TransactionRow[];
+  /** How many exist in all, so the page can say when it shows only some. */
+  totalCount: number;
   categories: string[];
   accounts: string[];
   periodStarts: {
@@ -115,7 +100,7 @@ export async function getTransactionsData(): Promise<TransactionsData> {
   const db = getDb();
   const monthStart = monthStartInAppTimezone();
   const today = todayInAppTimezone();
-  const timeZone = process.env.APP_TIMEZONE ?? "America/New_York";
+  const timeZone = appTimeZone();
 
   const result = await db.execute(sql`
     with transaction_rows as (
@@ -171,7 +156,7 @@ export async function getTransactionsData(): Promise<TransactionsData> {
       from public.transactions t
       join public.accounts a on a.id = t.account_id
       order by sort_at desc, t.id desc
-      limit 750
+      limit ${TRANSACTION_LIMIT}
     ),
     transaction_data as (
       select coalesce(
@@ -185,20 +170,23 @@ export async function getTransactionsData(): Promise<TransactionsData> {
     ),
     metric as (
       select
-        coalesce(sum(amount) filter (
-          where amount > 0 and pending = false
-        ), 0)::float8 as income,
-        coalesce(abs(sum(amount) filter (
-          where amount < 0 and pending = false
-        )), 0)::float8 as spending,
-        coalesce(sum(amount) filter (where pending = false), 0)::float8 as net,
-        coalesce(abs(sum(amount) filter (where pending = true)), 0)::float8 as pending
+        ${INCOME_TOTAL} as income,
+        ${SPENDING_TOTAL} as spending
       from public.transactions
       where transaction_date >= ${monthStart}::date
-        and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+        and transaction_date < ${monthStart}::date + interval '1 month'
+        and ${COUNTS_AS_CASH_FLOW}
+    ),
+    pending_total as (
+      select coalesce(abs(sum(amount)), 0)::float8 as pending
+      from public.transactions
+      where pending = true
+    ),
+    total as (
+      select count(*)::int as total_count from public.transactions
     )
-    select transaction_data.data, metric.*
-    from transaction_data, metric
+    select transaction_data.data, metric.*, pending_total.*, total.*
+    from transaction_data, metric, pending_total, total
   `);
 
   const row = result[0] as Row | undefined;
@@ -250,8 +238,12 @@ export async function getTransactionsData(): Promise<TransactionsData> {
     updatedAt: stringValue(item.updated_at),
   }));
 
+  const income = numberValue(row?.income);
+  const spending = numberValue(row?.spending);
+
   return {
     transactions,
+    totalCount: numberValue(row?.total_count),
     categories: Array.from(
       new Set(transactions.map((item) => item.category).filter(Boolean)),
     ).sort() as string[],
@@ -265,9 +257,9 @@ export async function getTransactionsData(): Promise<TransactionsData> {
       ytd: `${today.slice(0, 4)}-01-01`,
     },
     metrics: {
-      income: numberValue(row?.income),
-      spending: numberValue(row?.spending),
-      net: numberValue(row?.net),
+      income,
+      spending,
+      net: income - spending,
       pending: numberValue(row?.pending),
     },
   };
@@ -293,6 +285,7 @@ export async function getAccountsData(): Promise<AccountsData> {
         institution_name,
         name,
         coalesce(account_subtype, account_type) as type,
+        account_type,
         mask,
         source::text,
         current_balance::float8 as balance,
@@ -300,6 +293,7 @@ export async function getAccountsData(): Promise<AccountsData> {
         connected,
         last_synced_at::text
       from public.accounts
+      where connected = true
       order by institution_name, current_balance desc, name
     ),
     account_data as (
@@ -313,11 +307,12 @@ export async function getAccountsData(): Promise<AccountsData> {
       select
         coalesce(sum(current_balance) filter (where current_balance >= 0), 0)::float8 as assets,
         coalesce(abs(sum(current_balance) filter (where current_balance < 0)), 0)::float8 as liabilities,
-        coalesce(sum(available_balance) filter (
-          where account_type in ('depository', 'cash')
+        coalesce(sum(coalesce(available_balance, current_balance)) filter (
+          where account_type = 'depository'
         ), 0)::float8 as available_cash,
-        count(*) filter (where connected)::int as connected
+        count(*)::int as connected
       from public.accounts
+      where connected = true
     )
     select
       account_data.data,
@@ -333,6 +328,7 @@ export async function getAccountsData(): Promise<AccountsData> {
       institutionName: stringValue(item.institution_name),
       name: stringValue(item.name),
       type: stringValue(item.type),
+      accountType: stringValue(item.account_type),
       mask: item.mask ? stringValue(item.mask) : null,
       source: stringValue(item.source),
       balance: numberValue(item.balance),
@@ -386,7 +382,7 @@ function cadenceValue(value: unknown): SubscriptionCadence | null {
 export async function getSubscriptionsData(): Promise<SubscriptionsData> {
   await requireSession();
   const db = getDb();
-  const candidateRows = await db.execute(sql`
+  const candidateQuery = db.execute(sql`
     select
       coalesce(merchant_name, name) as merchant,
       name as description,
@@ -396,7 +392,7 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
       abs(amount)::float8 as amount,
       coalesce(
         transaction_at,
-        transaction_date::timestamp at time zone ${process.env.APP_TIMEZONE ?? "America/New_York"}
+        transaction_date::timestamp at time zone ${appTimeZone()}
       )::text as occurred_at
     from public.transactions
     where amount < 0
@@ -410,7 +406,7 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
       )
     order by occurred_at
   `);
-  const ruleRows = await db.execute(sql`
+  const ruleQuery = db.execute(sql`
     select
       id,
       stream_key,
@@ -423,7 +419,7 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
     from public.subscription_rules
     order by updated_at desc
   `);
-  const transactionRows = await db.execute(sql`
+  const transactionQuery = db.execute(sql`
     select
       id,
       coalesce(merchant_name, name) as merchant,
@@ -433,7 +429,7 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
       abs(amount)::float8 as amount,
       coalesce(
         transaction_at,
-        transaction_date::timestamp at time zone ${process.env.APP_TIMEZONE ?? "America/New_York"}
+        transaction_date::timestamp at time zone ${appTimeZone()}
       )::text as occurred_at
     from public.transactions
     where amount < 0
@@ -448,6 +444,11 @@ export async function getSubscriptionsData(): Promise<SubscriptionsData> {
     order by occurred_at desc
     limit 200
   `);
+  const [candidateRows, ruleRows, transactionRows] = await Promise.all([
+    candidateQuery,
+    ruleQuery,
+    transactionQuery,
+  ]);
 
   const candidates = (candidateRows as Row[]).map((item) => ({
     merchant: stringValue(item.merchant),
@@ -568,27 +569,51 @@ export type InvestmentAccountSummary = {
   institutionName: string;
   mask: string | null;
   value: number;
-  costBasis: number;
-  gain: number;
+  /** Null when the brokerage doesn't share what was paid. */
+  costBasis: number | null;
+  gain: number | null;
   gainPercent: number | null;
+};
+
+export type HoldingSummary = {
+  symbol: string;
+  name: string;
+  assetType: string;
+  quantity: number;
+  price: number | null;
+  value: number;
+  costBasis: number | null;
+  gain: number | null;
+  gainPercent: number | null;
+  /** Share of everything held, as a percentage. */
+  share: number;
 };
 
 export type InvestmentsData = {
   accounts: InvestmentAccountSummary[];
+  holdings: HoldingSummary[];
+  allocation: { type: string; value: number; percent: number }[];
   history: { date: string; value: number }[];
   metrics: {
     value: number;
-    costBasis: number;
-    gain: number;
+    costBasis: number | null;
+    gain: number | null;
     gainPercent: number | null;
     accounts: number;
+    /** True when some holdings have no cost basis, so gain is a partial figure. */
+    gainIsPartial: boolean;
   };
 };
+
+function percentOf(part: number | null, whole: number | null): number | null {
+  return part === null || !whole ? null : (part / whole) * 100;
+}
 
 export async function getInvestmentsData(): Promise<InvestmentsData> {
   await requireSession();
   const db = getDb();
-  const [accountsResult, historyResult] = await Promise.all([
+  const today = todayInAppTimezone();
+  const [accountsResult, holdingsResult, historyResult] = await Promise.all([
     db.execute(sql`
       select
         a.id,
@@ -597,14 +622,34 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
         a.institution_name,
         a.mask,
         a.current_balance::float8 as value,
-        coalesce(sum(h.cost_basis), 0)::float8 as cost_basis,
-        coalesce(sum(h.unrealized_gain), 0)::float8 as gain
+        sum(h.cost_basis)::float8 as cost_basis,
+        sum(h.unrealized_gain)::float8 as gain
       from public.accounts a
       left join public.holdings h on h.account_id = a.id
       where a.connected = true
-        and (a.account_type = 'investment' or a.source = 'robinhood')
+        and a.account_type = 'investment'
       group by a.id
       order by a.current_balance desc, a.name
+    `),
+    db.execute(sql`
+      select
+        h.symbol,
+        max(h.name) as name,
+        max(h.asset_type) as asset_type,
+        sum(h.quantity)::float8 as quantity,
+        max(h.current_price)::float8 as price,
+        sum(h.current_value)::float8 as value,
+        case when count(h.cost_basis) = count(*)
+          then sum(h.cost_basis)::float8
+        end as cost_basis,
+        case when count(h.unrealized_gain) = count(*)
+          then sum(h.unrealized_gain)::float8
+        end as gain
+      from public.holdings h
+      join public.accounts a on a.id = h.account_id
+      where a.connected = true
+      group by h.symbol
+      order by value desc
     `),
     db.execute(sql`
       select
@@ -612,16 +657,19 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
         sum(snapshots.unrealized_gain)::float8 as value
       from public.investment_snapshots snapshots
       join public.accounts a on a.id = snapshots.account_id
-      where snapshots.snapshot_date >= current_date - interval '365 days'
+      where snapshots.snapshot_date >= ${today}::date - 365
         and a.connected = true
-        and (a.account_type = 'investment' or a.source = 'robinhood')
       group by snapshots.snapshot_date
       order by snapshots.snapshot_date
     `),
   ]);
+
+  const nullableNumber = (value: unknown) =>
+    value == null ? null : numberValue(value);
+
   const accounts = (accountsResult as Row[]).map((item) => {
-    const costBasis = numberValue(item.cost_basis);
-    const gain = numberValue(item.gain);
+    const costBasis = nullableNumber(item.cost_basis);
+    const gain = nullableNumber(item.gain);
     return {
       id: numberValue(item.id),
       name: stringValue(item.name),
@@ -633,18 +681,59 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
       value: numberValue(item.value),
       costBasis,
       gain,
-      gainPercent: costBasis ? (gain / costBasis) * 100 : null,
+      gainPercent: percentOf(gain, costBasis),
     };
   });
-  const value = accounts.reduce((sum, account) => sum + account.value, 0);
-  const costBasis = accounts.reduce(
-    (sum, account) => sum + account.costBasis,
+
+  const holdingRows = holdingsResult as Row[];
+  const holdingsTotal = holdingRows.reduce(
+    (sum, item) => sum + numberValue(item.value),
     0,
   );
-  const gain = accounts.reduce((sum, account) => sum + account.gain, 0);
+  const holdings = holdingRows.map((item) => {
+    const value = numberValue(item.value);
+    const costBasis = nullableNumber(item.cost_basis);
+    const gain = nullableNumber(item.gain);
+    return {
+      symbol: stringValue(item.symbol),
+      name: stringValue(item.name),
+      assetType: stringValue(item.asset_type),
+      quantity: numberValue(item.quantity),
+      price: nullableNumber(item.price),
+      value,
+      costBasis,
+      gain,
+      gainPercent: percentOf(gain, costBasis),
+      share: holdingsTotal ? (value / holdingsTotal) * 100 : 0,
+    };
+  });
+
+  const byType = new Map<string, number>();
+  for (const holding of holdings) {
+    byType.set(
+      holding.assetType,
+      (byType.get(holding.assetType) ?? 0) + holding.value,
+    );
+  }
+  const allocation = Array.from(byType, ([type, value]) => ({
+    type,
+    value,
+    percent: holdingsTotal ? (value / holdingsTotal) * 100 : 0,
+  })).sort((a, b) => b.value - a.value);
+
+  const value = accounts.reduce((sum, account) => sum + account.value, 0);
+  const known = accounts.filter((account) => account.costBasis !== null);
+  const costBasis = known.length
+    ? known.reduce((sum, account) => sum + (account.costBasis ?? 0), 0)
+    : null;
+  const gain = known.length
+    ? known.reduce((sum, account) => sum + (account.gain ?? 0), 0)
+    : null;
 
   return {
     accounts,
+    holdings,
+    allocation,
     history: (historyResult as Row[]).map((item) => ({
       date: stringValue(item.date),
       value: numberValue(item.value),
@@ -653,10 +742,11 @@ export async function getInvestmentsData(): Promise<InvestmentsData> {
       value,
       costBasis,
       gain,
-      gainPercent: costBasis
-        ? (gain / costBasis) * 100
-        : null,
+      gainPercent: percentOf(gain, costBasis),
       accounts: accounts.length,
+      gainIsPartial:
+        known.length < accounts.length ||
+        holdings.some((holding) => holding.costBasis === null),
     },
   };
 }
@@ -687,12 +777,12 @@ export async function getBudgetsData(): Promise<BudgetsData> {
     with category_spend as (
       select
         coalesce(category_primary, 'OTHER') as category,
-        abs(sum(amount))::float8 as spent
+        greatest(sum(-amount), 0)::float8 as spent
       from public.transactions
       where transaction_date >= ${monthStart}::date
-        and amount < 0
-        and pending = false
-        and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+        and transaction_date < ${monthStart}::date + interval '1 month'
+        and ${COUNTS_AS_CASH_FLOW}
+        and not ${IS_INCOME}
       group by coalesce(category_primary, 'OTHER')
     ),
     categories as (
@@ -755,12 +845,17 @@ export type SpendingData = {
     spending: number;
     net: number;
   }[];
-  categories: { category: string; value: number }[];
+  categories: { category: string; value: number; previous: number }[];
+  topMerchants: { merchant: string; value: number; count: number }[];
   metrics: {
     income: number;
     spending: number;
     net: number;
     topCategory: { category: string; value: number } | null;
+    /** Share of income kept, as a percentage. Null with no income that month. */
+    savingsRate: number | null;
+    /** Typical spending across the earlier months that have any. */
+    averageSpending: number | null;
   };
 };
 
@@ -803,13 +898,12 @@ export async function getSpendingData(
     monthly_rows as (
       select
         date_trunc('month', transaction_date)::date as month,
-        coalesce(sum(amount) filter (where amount > 0), 0)::float8 as income,
-        coalesce(abs(sum(amount) filter (where amount < 0)), 0)::float8 as spending
+        ${INCOME_TOTAL} as income,
+        ${SPENDING_TOTAL} as spending
       from public.transactions, selection
       where transaction_date >= selection.month - interval '5 months'
         and transaction_date < selection.month + interval '1 month'
-        and pending = false
-        and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+        and ${COUNTS_AS_CASH_FLOW}
       group by date_trunc('month', transaction_date)::date
     ),
     monthly_data as (
@@ -839,36 +933,73 @@ export async function getSpendingData(
       ) as data
       from available_month_rows
     ),
-    category_rows as (
+    category_totals as (
       select
         coalesce(category_primary, 'OTHER') as category,
-        abs(sum(amount))::float8 as value
+        coalesce(sum(-amount) filter (
+          where transaction_date >= selection.month
+        ), 0)::float8 as value,
+        coalesce(sum(-amount) filter (
+          where transaction_date < selection.month
+        ), 0)::float8 as previous
       from public.transactions, selection
-      where transaction_date >= selection.month
+      where transaction_date >= selection.month - interval '1 month'
         and transaction_date < selection.month + interval '1 month'
-        and amount < 0
-        and pending = false
-        and coalesce(category_primary, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')
+        and ${COUNTS_AS_CASH_FLOW}
+        and not ${IS_INCOME}
       group by coalesce(category_primary, 'OTHER')
+    ),
+    category_rows as (
+      select category, value, greatest(previous, 0) as previous
+      from category_totals
+      where value > 0
       order by value desc
       limit 10
     ),
     category_data as (
       select coalesce(
         jsonb_agg(
-          jsonb_build_object('category', category, 'value', value)
+          jsonb_build_object(
+            'category', category,
+            'value', value,
+            'previous', previous
+          )
           order by value desc
         ),
         '[]'::jsonb
       ) as data
       from category_rows
+    ),
+    merchant_rows as (
+      select
+        coalesce(merchant_name, name) as merchant,
+        sum(-amount)::float8 as value,
+        count(*)::int as count
+      from public.transactions, selection
+      where transaction_date >= selection.month
+        and transaction_date < selection.month + interval '1 month'
+        and ${COUNTS_AS_CASH_FLOW}
+        and not ${IS_INCOME}
+      group by coalesce(merchant_name, name)
+      having sum(-amount) > 0
+      order by value desc
+      limit 8
+    ),
+    merchant_data as (
+      select coalesce(
+        jsonb_agg(to_jsonb(merchant_rows) order by value desc),
+        '[]'::jsonb
+      ) as data
+      from merchant_rows
     )
     select
       monthly_data.data as monthly,
       category_data.data as categories,
+      merchant_data.data as top_merchants,
       available_month_data.data as available_months,
       selection.month::text as selected_month
-    from monthly_data, category_data, available_month_data, selection
+    from monthly_data, category_data, merchant_data, available_month_data,
+      selection
   `);
 
   const row = result[0] as Row | undefined;
@@ -889,8 +1020,19 @@ export async function getSpendingData(
   ).map((item) => ({
     category: stringValue(item.category),
     value: numberValue(item.value),
+    previous: numberValue(item.previous),
+  }));
+  const topMerchants = (
+    Array.isArray(row?.top_merchants) ? (row.top_merchants as Row[]) : []
+  ).map((item) => ({
+    merchant: stringValue(item.merchant),
+    value: numberValue(item.value),
+    count: numberValue(item.count),
   }));
   const selectedMetrics = monthly.at(-1);
+  const earlierMonths = monthly
+    .slice(0, -1)
+    .filter((month) => month.spending > 0);
 
   return {
     selectedMonth: stringValue(row?.selected_month),
@@ -901,11 +1043,19 @@ export async function getSpendingData(
     ).map(stringValue),
     monthly,
     categories,
+    topMerchants,
     metrics: {
       income: selectedMetrics?.income ?? 0,
       spending: selectedMetrics?.spending ?? 0,
       net: selectedMetrics?.net ?? 0,
       topCategory: categories.at(0) ?? null,
+      savingsRate: selectedMetrics?.income
+        ? (selectedMetrics.net / selectedMetrics.income) * 100
+        : null,
+      averageSpending: earlierMonths.length
+        ? earlierMonths.reduce((sum, month) => sum + month.spending, 0) /
+          earlierMonths.length
+        : null,
     },
   };
 }

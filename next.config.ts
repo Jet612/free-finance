@@ -2,14 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "plaid-merchant-logos.plaid.com",
-        pathname: "/**",
-      },
-    ],
+  // Logos load straight from Plaid. Skipping server-side image processing removes
+  // the optimizer, the source of several past critical Next.js advisories.
+  images: { unoptimized: true },
+  // Not a secret. Client components need it to show dates in the owner's zone.
+  env: {
+    NEXT_PUBLIC_APP_TIMEZONE: process.env.APP_TIMEZONE ?? "America/New_York",
   },
   turbopack: {
     root: process.cwd(),

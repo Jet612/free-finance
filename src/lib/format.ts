@@ -1,3 +1,5 @@
+import { appTimeZone } from "@/lib/timezone";
+
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -46,7 +48,7 @@ export function formatDate(value: Date | string | null): string {
 
 export function formatDateTime(
   value: Date | string | null,
-  timeZone = process.env.APP_TIMEZONE ?? "America/New_York",
+  timeZone = appTimeZone(),
 ): string {
   if (!value) return "Never";
   const date = value instanceof Date ? value : new Date(value);
@@ -92,7 +94,7 @@ export function formatRelativeTime(
 export function formatTransactionDateTime(
   transactionAt: string | null,
   date: string,
-  timeZone = process.env.APP_TIMEZONE ?? "America/New_York",
+  timeZone = appTimeZone(),
 ): { date: string; time: string | null } {
   if (!transactionAt) {
     return {
@@ -128,6 +130,22 @@ export function formatMonth(value: string): string {
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(`${value.slice(0, 7)}-15T12:00:00Z`));
+}
+
+const ASSET_TYPE_LABELS: Record<string, string> = {
+  cash: "Cash",
+  cryptocurrency: "Crypto",
+  derivative: "Options",
+  equity: "Stocks",
+  etf: "ETFs",
+  "fixed income": "Bonds",
+  loan: "Loans",
+  "mutual fund": "Mutual funds",
+  other: "Other",
+};
+
+export function assetTypeLabel(value: string): string {
+  return ASSET_TYPE_LABELS[value.toLowerCase()] ?? titleCase(value);
 }
 
 export function titleCase(value: string | null): string {

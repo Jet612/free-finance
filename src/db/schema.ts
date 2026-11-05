@@ -11,9 +11,12 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+// "robinhood" only describes history from before Robinhood moved to Plaid.
+// PostgreSQL can't drop an enum value that existing rows still use.
 export const accountSource = pgEnum("account_source", [
   "plaid",
   "robinhood",
@@ -26,6 +29,59 @@ export const syncStatus = pgEnum("sync_status", [
   "failed",
   "skipped",
 ]);
+
+export const plaidItemStatus = pgEnum("plaid_item_status", [
+  "active",
+  "login_required",
+  "error",
+]);
+
+/** The single person allowed in. Claimed once on the first-run screen. */
+export const appOwner = pgTable(
+  "app_owner",
+  {
+    singleton: boolean().primaryKey().default(true),
+    userId: uuid("user_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [check("app_owner_single_row", sql`${table.singleton}`)],
+);
+
+/** One row per connected institution. */
+export const plaidItems = pgTable(
+  "plaid_items",
+  {
+    id: bigint({ mode: "number" })
+      .primaryKey()
+      .generatedAlwaysAsIdentity(),
+    itemId: text("item_id").notNull(),
+    institutionId: text("institution_id"),
+    institutionName: text("institution_name").notNull(),
+    // AES-256-GCM ciphertext from token-crypto.ts. Selected only by the sync.
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    cursor: text(),
+    status: plaidItemStatus().notNull().default("active"),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    lastAttemptAt: timestamp("last_attempt_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    lastSuccessAt: timestamp("last_success_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex("plaid_items_item_id_uidx").on(table.itemId)],
+);
 
 export const accounts = pgTable(
   "accounts",
@@ -368,3 +424,4 @@ export type Transaction = typeof transactions.$inferSelect;
 export type Budget = typeof budgets.$inferSelect;
 export type SubscriptionRule = typeof subscriptionRules.$inferSelect;
 export type Holding = typeof holdings.$inferSelect;
+export type PlaidItem = typeof plaidItems.$inferSelect;
