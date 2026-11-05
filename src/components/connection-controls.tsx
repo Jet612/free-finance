@@ -10,6 +10,7 @@ import {
   Unplug,
   type LucideIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
@@ -19,6 +20,7 @@ import {
   type ConnectionActionState,
 } from "@/app/connection-actions";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const initialState: ConnectionActionState = { status: "idle" };
 
@@ -36,7 +38,7 @@ function useRedirectOnSuccess(state: ConnectionActionState) {
 function ErrorMessage({ state }: { state: ConnectionActionState }) {
   if (state.status !== "error" || !state.message) return null;
   return (
-    <p role="alert" className="text-xs leading-5 text-destructive">
+    <p role="alert" className="text-[0.8125rem] leading-5 text-destructive">
       {state.message}
     </p>
   );
@@ -53,7 +55,7 @@ function PendingAwareButton({
 }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" variant={variant} disabled={pending} className="w-full">
+    <Button type="submit" variant={variant} disabled={pending} className="h-10 w-full">
       {pending ? <LoaderCircle className="animate-spin" /> : <Icon />}
       {pending ? "Opening Plaid…" : label}
     </Button>
@@ -82,7 +84,16 @@ function AddConnectionForm({
   );
 }
 
-export function AddConnectionButtons() {
+export function AddConnectionButtons({ only }: { only?: "investment" }) {
+  if (only === "investment") {
+    return (
+      <AddConnectionForm
+        kind="investment"
+        label="Add an investment account"
+        icon={TrendingUp}
+      />
+    );
+  }
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <AddConnectionForm
@@ -138,7 +149,7 @@ export function RemoveConnectionButton({
         type="button"
         variant="ghost"
         size="sm"
-        className="text-muted-foreground"
+        className="-ml-2.5 text-muted-foreground"
         onClick={() => setConfirming(true)}
       >
         Remove
@@ -149,7 +160,7 @@ export function RemoveConnectionButton({
   return (
     <form action={action} className="grid gap-2">
       <input type="hidden" name="itemId" value={itemId} />
-      <p className="max-w-xs text-xs leading-5 text-muted-foreground">
+      <p className="max-w-xs text-[0.8125rem] leading-5 text-muted-foreground">
         This stops updates and takes these accounts out of your totals. Your past
         transactions stay here.
       </p>
@@ -166,6 +177,48 @@ export function RemoveConnectionButton({
       </div>
       <ErrorMessage state={state} />
     </form>
+  );
+}
+
+/** What Today shows while a new bank's first import runs, then if it runs long. */
+export function ImportProgress({ connectionsHref }: { connectionsHref: string }) {
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), IMPORT_POLL_LIMIT_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <div role="status" className="pt-6">
+      <h1 className="wide text-[2rem] font-semibold leading-tight tracking-[-0.02em]">
+        {slow ? "This is taking longer than usual" : "Bringing in your accounts"}
+      </h1>
+      <p className="mt-2 max-w-[60ch] text-[0.9375rem] leading-6 text-muted-foreground">
+        {slow ? (
+          <>
+            It keeps running without this page open, so you can leave and come back. If it
+            doesn&apos;t finish, check{" "}
+            <Link href={connectionsHref} className="font-medium text-foreground underline underline-offset-3">
+              your connections
+            </Link>
+            .
+          </>
+        ) : (
+          "This usually takes about a minute. The page updates by itself when it's done."
+        )}
+      </p>
+      {!slow && (
+        <div aria-hidden="true" className="mt-6 grid gap-3">
+          <Skeleton className="h-52 rounded-2xl" />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <Skeleton key={index} className="h-16 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

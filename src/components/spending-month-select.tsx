@@ -55,7 +55,7 @@ export function SpendingMonthSelect({
   }
 
   return (
-    <div className="inline-flex w-fit max-w-full items-center rounded-lg border bg-card/70 p-0.5">
+    <div className="inline-flex w-fit max-w-full items-center rounded-lg bg-card p-0.5 text-card-foreground">
       <p className="sr-only">
         View month
       </p>

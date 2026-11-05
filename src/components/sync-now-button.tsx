@@ -11,48 +11,34 @@ const initialState: SyncActionState = { status: "idle" };
 
 function SubmitButton() {
   const { pending } = useFormStatus();
-
   return (
     <Button
       type="submit"
-      variant="link"
+      variant="ghost"
       size="sm"
-      className="h-auto rounded-sm p-0 text-xs"
       disabled={pending}
       aria-describedby="sync-now-status"
     >
-      {pending ? (
-        <>
-          <LoaderCircle className="size-3.5 animate-spin" />
-          Updating…
-        </>
-      ) : (
-        <>
-          <RefreshCw className="size-3.5" />
-          Refresh
-        </>
-      )}
+      {pending ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+      {pending ? "Updating" : "Refresh"}
     </Button>
   );
 }
 
 export function SyncNowButton() {
   const [state, action] = useActionState(requestSync, initialState);
-
   return (
-    <div className="grid justify-items-start gap-1 sm:justify-items-end">
+    <div className="flex items-center gap-2">
+      <p
+        id="sync-now-status"
+        aria-live="polite"
+        className={state.message ? "text-[0.8125rem] text-muted-foreground" : "sr-only"}
+      >
+        {state.message ?? "Ready to refresh."}
+      </p>
       <form action={action}>
         <SubmitButton />
       </form>
-      <div
-        id="sync-now-status"
-        aria-live="polite"
-        className={
-          state.message ? "text-[11px] text-muted-foreground" : "sr-only"
-        }
-      >
-        {state.message ?? "Ready to refresh."}
-      </div>
     </div>
   );
 }

@@ -1,25 +1,16 @@
 import type { ReactNode } from "react";
-import { ChartNoAxesCombined, CircleDollarSign, Landmark, TrendingUp } from "lucide-react";
 
+import { SegmentBar } from "@/components/charts/segment-bar";
 import { HoldingsTable } from "@/components/holdings-table";
-import {
-  HoldingsValueChart,
-  InvestmentAllocationChart,
-} from "@/components/investment-charts";
-import { InvestmentHistoryChart } from "@/components/investment-history-chart";
-import { PageHeader } from "@/components/page-header";
-import { SummaryStrip } from "@/components/summary-strip";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { InvestmentHistory } from "@/components/investment-history";
+import { Money } from "@/components/money";
+import { EmptyNote, PageHeader, Panel, SectionHeading } from "@/components/page-header";
 import type { InvestmentsData } from "@/lib/detail-data";
-import { formatCurrency, formatPercent } from "@/lib/format";
+import { assetTypeLabel, formatPercent, formatWholeCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const NOT_SHARED = "Not shared";
-
-function gainTone(gain: number | null) {
-  if (gain === null) return "default" as const;
-  return gain >= 0 ? ("positive" as const) : ("negative" as const);
-}
+const CONCENTRATED_SHARE = 25;
+const SINGLE_NAME_TYPES = new Set(["equity", "cryptocurrency", "derivative"]);
 
 export function InvestmentsView({
   data,
@@ -28,79 +19,134 @@ export function InvestmentsView({
   data: InvestmentsData;
   emptyAction?: ReactNode;
 }) {
+  const { metrics } = data;
+
   if (!data.accounts.length) {
     return (
-      <div className="grid gap-7">
-        <PageHeader title="Investments" />
-        <Card className="shadow-none">
-          <CardHeader>
-            <CardTitle className="text-base">No investment accounts yet</CardTitle>
-            <CardDescription>
-              Connect Robinhood, Fidelity, or another brokerage through Plaid to
-              see your holdings, gains, and how your money is spread out.
-            </CardDescription>
-          </CardHeader>
-          {emptyAction && <CardContent>{emptyAction}</CardContent>}
-        </Card>
+      <div className="grid grid-cols-1 gap-6">
+        <PageHeader title="No investments yet" />
+        <Panel>
+          <EmptyNote
+            title="Connect a brokerage"
+            detail="Robinhood, Fidelity, and most others work. You'll see your holdings, gains, and how your money is spread out."
+            action={emptyAction}
+          />
+        </Panel>
       </div>
     );
   }
 
+  const concentrated = data.holdings.find(
+    (holding) =>
+      holding.share >= CONCENTRATED_SHARE &&
+      SINGLE_NAME_TYPES.has(holding.assetType.toLowerCase()),
+  );
+
   return (
-    <div className="grid gap-7">
-      <PageHeader title="Investments" />
-      <section className="grid gap-3" aria-labelledby="overview-heading">
-        <div><h2 id="overview-heading" className="text-sm font-semibold">Overview</h2><p className="mt-1 text-xs text-muted-foreground">All investment accounts combined</p></div>
-        <SummaryStrip items={[
-          { label: "Total investments", value: formatCurrency(data.metrics.value), icon: TrendingUp },
-          { label: "What you paid", value: data.metrics.costBasis === null ? NOT_SHARED : formatCurrency(data.metrics.costBasis), detail: "Your cost basis", icon: CircleDollarSign },
-          { label: "Gain or loss so far", value: data.metrics.gain === null ? NOT_SHARED : formatCurrency(data.metrics.gain), detail: data.metrics.gain === null ? "Your brokerage doesn't share this" : data.metrics.gainIsPartial ? `(${formatPercent(data.metrics.gainPercent)}) · partial, see below` : `(${formatPercent(data.metrics.gainPercent)})`, icon: ChartNoAxesCombined, tone: gainTone(data.metrics.gain) },
-          { label: "Accounts", value: String(data.metrics.accounts), detail: "Included in the combined total", icon: Landmark },
-        ]} />
-        {data.metrics.gainIsPartial && data.metrics.gain !== null && (
-          <p className="text-xs leading-5 text-muted-foreground">
-            Some brokerages don&apos;t share what you originally paid. Gain and loss
-            only include the holdings where that&apos;s known.
-          </p>
-        )}
-      </section>
+    <div className="grid grid-cols-1 gap-8">
+      <PageHeader
+        note
+        title={
+          <>
+            <Money value={metrics.value} whole /> invested
+          </>
+        }
+        detail={
+          metrics.gain === null ? (
+            "Your brokerage doesn't share what you paid, so gains can't be shown."
+          ) : (
+            <>
+              <span className={cn("font-semibold", metrics.gain >= 0 ? "text-note-positive" : "text-note-negative")}>
+                {metrics.gain >= 0 ? "Up" : "Down"} <Money value={Math.abs(metrics.gain)} whole /> ({formatPercent(Math.abs(metrics.gainPercent ?? 0), 1)})
+              </span>{" "}
+              on the <Money value={metrics.costBasis ?? 0} whole /> you put in
+              {metrics.gainIsPartial && ". Some holdings don't share what you paid, so this covers only part of your portfolio"}.
+            </>
+          )
+        }
+      />
+
+      <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+        <section aria-labelledby="history-heading">
+          <SectionHeading title={<span id="history-heading">Over time</span>} />
+          <Panel className="p-4 sm:p-5">
+            <InvestmentHistory history={data.history} />
+          </Panel>
+        </section>
+
+        <section aria-labelledby="mix-heading">
+          <SectionHeading title={<span id="mix-heading">Your mix</span>} />
+          <Panel className="p-4 sm:p-5">
+            <SegmentBar
+              segments={data.allocation.slice(0, 6).map((item, index) => ({
+                key: item.type,
+                label: assetTypeLabel(item.type),
+                value: item.value,
+                color: `var(--cat-${index + 1})`,
+              }))}
+              format={formatWholeCurrency}
+              ariaLabel="How your investments are spread"
+            />
+            <ul className="mt-4 grid gap-1.5 border-t pt-3 text-[0.9375rem]">
+              {data.allocation.map((item) => (
+                <li key={item.type} className="flex justify-between gap-3">
+                  <span>{assetTypeLabel(item.type)}</span>
+                  <span className="flex gap-3">
+                    <span className="tnum text-muted-foreground">{formatPercent(item.percent, 0)}</span>
+                    <Money value={item.value} whole className="tnum w-20 text-right" />
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {concentrated && (
+              <p className="mt-3 text-[0.8125rem] leading-5 text-warning">
+                {concentrated.symbol} alone is {formatPercent(concentrated.share, 0)} of your portfolio, which is a lot to ride on one name.
+              </p>
+            )}
+          </Panel>
+        </section>
+      </div>
 
       {data.holdings.length > 0 && (
-        <section className="grid gap-4 xl:grid-cols-2">
-          <Card className="shadow-none">
-            <CardHeader><CardTitle>How your money is spread</CardTitle><CardDescription>By type of investment</CardDescription></CardHeader>
-            <CardContent><InvestmentAllocationChart data={data.allocation} /></CardContent>
-          </Card>
-          <Card className="shadow-none">
-            <CardHeader><CardTitle>Largest holdings</CardTitle><CardDescription>By current value</CardDescription></CardHeader>
-            <CardContent><HoldingsValueChart data={data.holdings.map((holding) => ({ symbol: holding.symbol, currentValue: holding.value, unrealizedGain: holding.gain, unrealizedGainPercent: holding.gainPercent }))} /></CardContent>
-          </Card>
+        <section aria-labelledby="holdings-heading">
+          <SectionHeading
+            title={<span id="holdings-heading">Holdings</span>}
+            detail="Everything you own, combined across accounts"
+          />
+          <Panel className="overflow-x-auto">
+            <HoldingsTable holdings={data.holdings} />
+          </Panel>
         </section>
       )}
 
-      <section className="grid gap-3" aria-labelledby="accounts-heading">
-        <div><h2 id="accounts-heading" className="text-sm font-semibold">Accounts</h2><p className="mt-1 text-xs text-muted-foreground">Each account shown separately</p></div>
-        <div className="grid gap-4 md:grid-cols-2">
-          {data.accounts.map((account) => (
-            <Card key={account.id} className="shadow-none">
-              <CardHeader className="border-b"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><CardTitle className="truncate">{account.name}</CardTitle><CardDescription className="mt-1 truncate">{account.institutionName}{account.mask ? ` · •••• ${account.mask}` : ""}</CardDescription></div><p className="shrink-0 font-mono text-lg font-medium tabular-nums">{formatCurrency(account.value)}</p></div></CardHeader>
-              <CardContent><div className="grid grid-cols-2 gap-6"><div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">What you paid</p><p className="mt-2 font-mono text-sm font-medium tabular-nums">{account.costBasis === null ? NOT_SHARED : formatCurrency(account.costBasis)}</p></div><div><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Gain/loss</p><p className={cn("mt-2 font-mono text-sm font-medium tabular-nums", account.gain !== null && (account.gain >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"))}>{account.gain === null ? NOT_SHARED : <>{formatCurrency(account.gain)}<span className="ml-2 text-xs font-normal">({formatPercent(account.gainPercent)})</span></>}</p></div></div></CardContent>
-            </Card>
-          ))}
-        </div>
+      <section aria-labelledby="accounts-heading">
+        <SectionHeading title={<span id="accounts-heading">Accounts</span>} />
+        <Panel className="overflow-hidden">
+          <ul className="divide-y">
+            {data.accounts.map((account) => (
+              <li key={account.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-[0.9375rem] font-medium leading-snug">{account.name}</span>
+                  <span className="block truncate text-[0.8125rem] leading-[1.125rem] text-muted-foreground">
+                    {account.institutionName}
+                    {account.mask && <> ending {account.mask}</>}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <Money value={account.value} className="tnum block text-[0.9375rem] font-medium" />
+                  {account.gain === null ? (
+                    <span className="block text-[0.8125rem] text-muted-foreground">Gain not shared</span>
+                  ) : (
+                    <span className={cn("block text-[0.8125rem]", account.gain >= 0 ? "text-positive" : "text-negative")}>
+                      <Money value={account.gain} signed whole /> ({formatPercent(Math.abs(account.gainPercent ?? 0), 1)})
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       </section>
-
-      {data.holdings.length > 0 && (
-        <section className="grid gap-3" aria-labelledby="holdings-heading">
-          <div><h2 id="holdings-heading" className="text-sm font-semibold">Holdings</h2><p className="mt-1 text-xs text-muted-foreground">Everything you own, combined across accounts</p></div>
-          <HoldingsTable holdings={data.holdings} />
-        </section>
-      )}
-
-      <Card className="shadow-none">
-        <CardHeader className="border-b"><CardTitle>Gains and losses over time</CardTitle><CardDescription>Your total gain or loss at each daily update</CardDescription></CardHeader>
-        <CardContent><InvestmentHistoryChart data={data.history} /><p className="mt-3 text-xs text-muted-foreground">Each point is what your investments were worth minus what you paid for them.</p></CardContent>
-      </Card>
     </div>
   );
 }

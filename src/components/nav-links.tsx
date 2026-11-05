@@ -1,85 +1,170 @@
 "use client";
 
-import Link from "next/link";
 import {
   ArrowLeftRight,
-  ChartNoAxesCombined,
+  ChartPie,
   Landmark,
-  LayoutDashboard,
-  PiggyBank,
-  Repeat2,
+  type LucideIcon,
   Settings2,
-  ShieldCheck,
-  TrendingUp,
+  Sun,
 } from "lucide-react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 
-const groups = [
+type Page = { href: string; label: string };
+type Section = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  /** Pages grouped under this section, shown as tabs. */
+  pages?: Page[];
+};
+
+/** Five destinations, so the whole app fits a phone's tab bar. */
+export const SECTIONS: Section[] = [
+  { href: "/", label: "Today", icon: Sun },
+  { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
   {
-    label: "Money",
-    links: [
-      { href: "/", label: "Overview", icon: LayoutDashboard },
-      { href: "/reports", label: "Spending", icon: ChartNoAxesCombined },
-      { href: "/investments", label: "Investments", icon: TrendingUp },
-      { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
-      { href: "/subscriptions", label: "Subscriptions", icon: Repeat2 },
-      { href: "/budgets", label: "Budgets", icon: PiggyBank },
-      { href: "/accounts", label: "Accounts", icon: Landmark },
+    href: "/reports",
+    label: "Spending",
+    icon: ChartPie,
+    pages: [
+      { href: "/reports", label: "Breakdown" },
+      { href: "/budgets", label: "Budgets" },
+      { href: "/subscriptions", label: "Bills & subscriptions" },
     ],
   },
   {
-    label: "Manage",
-    links: [
-      { href: "/setup", label: "Connections", icon: Settings2 },
-      { href: "/security", label: "Security", icon: ShieldCheck },
+    href: "/accounts",
+    label: "Net worth",
+    icon: Landmark,
+    pages: [
+      { href: "/accounts", label: "Accounts" },
+      { href: "/investments", label: "Investments" },
+    ],
+  },
+  {
+    href: "/setup",
+    label: "Settings",
+    icon: Settings2,
+    pages: [
+      { href: "/setup", label: "Connections" },
+      { href: "/security", label: "Security" },
     ],
   },
 ];
 
-export function NavLinks({
-  onNavigate,
-  basePath = "",
-}: {
-  onNavigate?: () => void;
-  basePath?: string;
-}) {
+function withBase(basePath: string, href: string): string {
+  return `${basePath}${href === "/" ? "" : href}` || "/";
+}
+
+function isActive(pathname: string, basePath: string, href: string): boolean {
+  const target = withBase(basePath, href);
+  if (href === "/") return pathname === target;
+  return pathname === target || pathname.startsWith(`${target}/`);
+}
+
+function activeSection(pathname: string, basePath: string): Section | undefined {
+  return SECTIONS.find((section) =>
+    (section.pages ?? [section]).some((page) =>
+      isActive(pathname, basePath, page.href),
+    ),
+  );
+}
+
+export function TopNav({ basePath = "" }: { basePath?: string }) {
   const pathname = usePathname();
+  const current = activeSection(pathname, basePath);
 
   return (
-    <nav className="grid gap-6" aria-label="Primary navigation">
-      {groups.map((group) => (
-        <div key={group.label}>
-          <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-            {group.label}
-          </p>
-          <div className="grid gap-1">
-            {group.links.map((link) => {
-              const href = `${basePath}${link.href === "/" ? "" : link.href}` || "/";
-              const active =
-                href === "/" || href === "/demo"
-                  ? pathname === href
-                  : pathname.startsWith(href);
-              return (
-                <Link
-                  key={link.href}
-                  href={href}
-                  onClick={onNavigate}
-                  className={cn(
-                    "flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground",
-                    active &&
-                      "bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary",
-                  )}
-                >
-                  <link.icon className="size-[17px]" strokeWidth={1.8} />
-                  {link.label}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+    <nav aria-label="Main" className="hidden items-center gap-1 lg:flex">
+      {SECTIONS.map((section) => {
+        const active = section === current;
+        return (
+          <Link
+            key={section.href}
+            href={withBase(basePath, section.href)}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
+              active && "bg-primary text-primary-foreground hover:text-primary-foreground",
+            )}
+          >
+            {section.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function SectionTabs({ basePath = "" }: { basePath?: string }) {
+  const pathname = usePathname();
+  const pages = activeSection(pathname, basePath)?.pages;
+  if (!pages) return null;
+
+  return (
+    <nav
+      aria-label="In this section"
+      className="scrollbar-none -mx-4 flex gap-6 overflow-x-auto border-b px-4 sm:mx-0 sm:px-0"
+    >
+      {pages.map((page) => {
+        const active = isActive(pathname, basePath, page.href);
+        return (
+          <Link
+            key={page.href}
+            href={withBase(basePath, page.href)}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "-mb-px shrink-0 border-b-2 border-transparent py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
+              active && "border-primary text-foreground",
+            )}
+          >
+            {page.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function BottomNav({ basePath = "" }: { basePath?: string }) {
+  const pathname = usePathname();
+  const current = activeSection(pathname, basePath);
+
+  return (
+    <nav
+      aria-label="Main"
+      className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t bg-card lg:hidden"
+    >
+      <div className="mx-auto grid max-w-lg grid-cols-5">
+        {SECTIONS.map((section) => {
+          const active = section === current;
+          return (
+            <Link
+              key={section.href}
+              href={withBase(basePath, section.href)}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex min-h-14 flex-col items-center justify-center gap-1 text-xs font-medium text-muted-foreground [font-stretch:85%]",
+                active && "text-foreground",
+              )}
+            >
+              <span
+                className={cn(
+                  "flex h-6 w-11 items-center justify-center rounded-full transition-colors",
+                  active && "bg-primary text-primary-foreground",
+                )}
+              >
+                <section.icon className="size-[18px]" strokeWidth={1.9} />
+              </span>
+              {section.label}
+            </Link>
+          );
+        })}
+      </div>
     </nav>
   );
 }

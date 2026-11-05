@@ -1,26 +1,51 @@
-import { ArrowDownLeft, ArrowUpRight, Clock3, WalletCards } from "lucide-react";
-
+import { Money } from "@/components/money";
 import { PageHeader } from "@/components/page-header";
-import { SummaryStrip } from "@/components/summary-strip";
-import { TransactionsTable } from "@/components/transactions-table";
-import { Card } from "@/components/ui/card";
+import { TransactionsExplorer } from "@/components/transactions-explorer";
 import type { TransactionsData } from "@/lib/detail-data";
-import { formatCurrency } from "@/lib/format";
+import {
+  DEFAULT_FILTERS,
+  parseTransactionFilters,
+} from "@/lib/transaction-filters";
 
-export function TransactionsView({ data }: { data: TransactionsData }) {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+export function TransactionsView({
+  data,
+  searchParams,
+  demo = false,
+}: {
+  data: TransactionsData;
+  searchParams: SearchParams;
+  demo?: boolean;
+}) {
+  const open = Number(searchParams.open);
+  const filters = parseTransactionFilters(searchParams);
+  // A link to something recent lands in the normal list, not all of history.
+  const target = data.transactions.find((item) => item.id === open);
+  const onlyOpen = Object.keys(searchParams).length === 1 && target;
+  const initialFilters =
+    onlyOpen && target.date >= data.periodStarts.last30Days
+      ? { ...filters, period: DEFAULT_FILTERS.period }
+      : filters;
   return (
-    <div className="grid gap-7">
-      <PageHeader title="Transactions" />
-      <SummaryStrip items={[
-        { label: "Income this month", value: formatCurrency(data.metrics.income), icon: ArrowDownLeft, tone: "positive" },
-        { label: "Spent this month", value: formatCurrency(data.metrics.spending), icon: ArrowUpRight },
-        { label: "Net cash flow", value: formatCurrency(data.metrics.net), icon: WalletCards, tone: data.metrics.net >= 0 ? "positive" : "negative" },
-        { label: "Pending", value: formatCurrency(data.metrics.pending), detail: "Not included in posted totals", icon: Clock3 },
-      ]} />
-      <Card className="py-0 shadow-none"><TransactionsTable transactions={data.transactions} categories={data.categories} accounts={data.accounts} periodStarts={data.periodStarts} /></Card>
-      {data.totalCount > data.transactions.length && (
-        <p className="text-xs text-muted-foreground">Showing your {data.transactions.length.toLocaleString("en-US")} most recent of {data.totalCount.toLocaleString("en-US")} transactions. Filters and search only cover the ones shown here.</p>
-      )}
+    <div className="grid grid-cols-1 gap-6">
+      <PageHeader
+        title="Transactions"
+        detail={
+          data.metrics.pending > 0 ? (
+            <>
+              <Money value={data.metrics.pending} /> is still pending and isn&apos;t in your totals yet.
+            </>
+          ) : undefined
+        }
+      />
+      <TransactionsExplorer
+        data={data}
+        demo={demo}
+        basePath={demo ? "/demo" : ""}
+        initialFilters={initialFilters}
+        initialOpenId={Number.isInteger(open) && open > 0 ? open : undefined}
+      />
     </div>
   );
 }

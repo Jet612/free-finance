@@ -55,7 +55,7 @@ export function WelcomeForm() {
         />
         <p
           id="setup-password-help"
-          className="text-xs leading-5 text-muted-foreground"
+          className="text-[0.8125rem] leading-5 text-muted-foreground"
         >
           The CRON_SECRET you created when deploying on Vercel. This proves the
           app is yours.
@@ -89,7 +89,7 @@ export function WelcomeForm() {
           aria-describedby="password-help"
           className="h-11"
         />
-        <p id="password-help" className="text-xs text-muted-foreground">
+        <p id="password-help" className="text-[0.8125rem] leading-5 text-muted-foreground">
           At least 12 characters. You&apos;ll use this to sign in from now on.
         </p>
       </div>

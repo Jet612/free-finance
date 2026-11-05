@@ -1,19 +1,24 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import { headers } from "next/headers";
+import { Hanken_Grotesk, Mona_Sans } from "next/font/google";
+import { cookies, headers } from "next/headers";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HIDE_AMOUNTS_COOKIE } from "@/lib/privacy";
 
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// One family: the width axis gives us the wide cut for figures and headlines.
+const monaSans = Mona_Sans({
+  variable: "--font-mona",
   subsets: ["latin"],
+  axes: ["wdth"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+// Mona's tabular digits are a slashed, typewriter-style set. Columns of money
+// use these instead, which match its proportions without the slashed zero.
+const figures = Hanken_Grotesk({
+  variable: "--font-figures",
   subsets: ["latin"],
 });
 
@@ -37,12 +42,15 @@ export default async function RootLayout({
 }>) {
   // The theme script runs before hydration, so it needs the CSP nonce too.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
+  // A cookie, so hidden amounts are hidden in the very first paint.
+  const hideAmounts = (await cookies()).get(HIDE_AMOUNTS_COOKIE)?.value === "1";
 
   return (
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      data-hide-amounts={hideAmounts ? "true" : undefined}
+      className={`${monaSans.variable} ${figures.variable} h-full antialiased`}
     >
       <body className="min-h-full">
         <ThemeProvider

@@ -1,27 +1,59 @@
-import { ChartNoAxesCombined } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+/**
+ * A guilloché rosette, the interlaced ring printed on banknotes and stock
+ * certificates. Built from rotated ellipses so it stays crisp at any size.
+ */
+export function Seal({
+  className,
+  rings = 9,
+  strokeWidth = 1.1,
+}: {
+  className?: string;
+  rings?: number;
+  strokeWidth?: number;
+}) {
+  return (
+    <svg
+      viewBox="0 0 100 100"
+      aria-hidden="true"
+      className={cn("shrink-0", className)}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+    >
+      {Array.from({ length: rings }, (_, index) => (
+        <ellipse
+          key={index}
+          cx="50"
+          cy="50"
+          rx="47"
+          ry="19"
+          transform={`rotate(${(index * 180) / rings} 50 50)`}
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+    </svg>
+  );
+}
 
 export function Brand({
   compact = false,
   name = "Free Finance",
+  onNote = false,
 }: {
   compact?: boolean;
   name?: string;
+  onNote?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <span className="flex size-10 items-center justify-center rounded-full bg-primary/85 text-primary-foreground">
-        <ChartNoAxesCombined className="size-[19px]" strokeWidth={2.1} />
-      </span>
+    <span className="inline-flex items-center gap-2.5">
+      <Seal className={cn("size-7", onNote ? "text-note-foreground" : "text-primary")} />
       {!compact && (
-        <span className="leading-none">
-          <span className="block text-[15px] font-semibold tracking-tight">
-            {name}
-          </span>
-          <span className="mt-1 block text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Private ledger
-          </span>
+        <span className="semiwide text-[0.9375rem] font-semibold tracking-tight">
+          {name}
         </span>
       )}
-    </div>
+    </span>
   );
 }

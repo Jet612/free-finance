@@ -65,17 +65,15 @@ export default async function SetupPage({
         notice={
           notice && (
             <Alert>
-              {notice.success ? <Check className="text-primary" /> : <Info />}
+              {notice.success ? <Check className="text-positive" /> : <Info />}
               <AlertTitle>{notice.text}</AlertTitle>
             </Alert>
           )
         }
         renderActions={(connection) => (
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            {connection.state === "needs-reconnect" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {connection.state === "needs-reconnect" && (
               <ReconnectButton itemId={connection.id} />
-            ) : (
-              <span />
             )}
             <RemoveConnectionButton
               itemId={connection.id}

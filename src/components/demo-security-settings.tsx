@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -56,17 +55,26 @@ export function DemoSecuritySettings() {
         </Alert>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card size="sm"><CardHeader><CardDescription>Account</CardDescription><CardTitle className="truncate">demo@freefinance.app</CardTitle></CardHeader></Card>
-        <Card size="sm"><CardHeader><CardDescription>Passkeys</CardDescription><CardTitle>{passkeys.length ? `${passkeys.length} enrolled` : "Optional"}</CardTitle></CardHeader></Card>
-        <Card size="sm"><CardHeader><CardDescription>Authenticator MFA</CardDescription><CardTitle className="flex items-center gap-2">{authenticators.length ? "Enabled" : "Optional"}<Badge variant={authenticators.length ? "default" : "secondary"}>{authenticators.length ? "AAL2" : "AAL1"}</Badge></CardTitle></CardHeader></Card>
-      </div>
+      <dl className="grid gap-x-10 gap-y-3 sm:flex">
+        <div className="min-w-0">
+          <dt className="text-[0.8125rem] text-muted-foreground">Signed in as</dt>
+          <dd className="truncate text-[0.9375rem] font-medium">demo@freefinance.app</dd>
+        </div>
+        <div>
+          <dt className="text-[0.8125rem] text-muted-foreground">Passkeys</dt>
+          <dd className="text-[0.9375rem] font-medium">{passkeys.length ? `${passkeys.length} added` : "None yet"}</dd>
+        </div>
+        <div>
+          <dt className="text-[0.8125rem] text-muted-foreground">Authenticator app</dt>
+          <dd className="text-[0.9375rem] font-medium">{authenticators.length ? "On" : "Off"}</dd>
+        </div>
+      </dl>
 
       <Card>
         <CardHeader className="border-b">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-primary/10 p-2 text-primary"><Fingerprint className="size-5" /></div>
-            <div><CardTitle>Passkeys</CardTitle><CardDescription>Phishing-resistant sign-in with Touch ID, Face ID, Windows Hello, or a hardware security key.</CardDescription></div>
+            <div><CardTitle>Passkeys</CardTitle><CardDescription>Sign in with Touch ID, Face ID, Windows Hello, or a hardware security key.</CardDescription></div>
           </div>
         </CardHeader>
         <CardContent className="grid gap-5">
@@ -85,7 +93,7 @@ export function DemoSecuritySettings() {
             <div className="grid flex-1 gap-2"><Label htmlFor="demo-passkey-name">New passkey name</Label><Input id="demo-passkey-name" name="name" placeholder="MacBook Touch ID" maxLength={120} /></div>
             <Button type="submit"><Plus />Add passkey</Button>
           </form>
-          <p className="text-xs leading-5 text-muted-foreground">Passkeys are optional and domain-bound. Add at least two before treating them as your primary recovery path. Supabase currently labels this API experimental.</p>
+          <p className="text-xs leading-5 text-muted-foreground">Passkeys only work on this site. Add at least two, in case you lose a device.</p>
         </CardContent>
       </Card>
 
@@ -93,7 +101,7 @@ export function DemoSecuritySettings() {
         <CardHeader className="border-b">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-primary/10 p-2 text-primary"><Smartphone className="size-5" /></div>
-            <div><CardTitle>Authenticator app (TOTP)</CardTitle><CardDescription>Optional second-factor codes from 1Password, Authy, Google Authenticator, or another compatible app.</CardDescription></div>
+            <div><CardTitle>Authenticator app</CardTitle><CardDescription>Six-digit codes from 1Password, Authy, Google Authenticator, or another compatible app.</CardDescription></div>
           </div>
         </CardHeader>
         <CardContent className="grid gap-5">
@@ -115,7 +123,7 @@ export function DemoSecuritySettings() {
           <Alert>
             <ShieldCheck />
             <AlertTitle>{authenticators.length ? "Second factor is enforced" : "Your choice, not a requirement"}</AlertTitle>
-            <AlertDescription>{authenticators.length ? "Because you enrolled TOTP, every new password or passkey session must complete a current authenticator code." : "Leave this disabled for simpler sign-in. Enabling it adds a required code after password or passkey authentication."}</AlertDescription>
+            <AlertDescription>{authenticators.length ? "Because you added an authenticator app, you'll enter a code each time you sign in." : "Leave this disabled for simpler sign-in. Enabling it adds a required code after password or passkey authentication."}</AlertDescription>
           </Alert>
         </CardContent>
       </Card>

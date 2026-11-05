@@ -58,12 +58,22 @@ That's it. Your accounts update by themselves every morning.
 ## Using it day to day
 
 - **Updates:** everything refreshes once a day, early in the morning (US time).
-  There's nothing to keep open. To update sooner, choose **Refresh** on the Overview page,
+  There's nothing to keep open. To update sooner, choose **Refresh** on the Today page,
   up to once an hour.
 - **If a bank asks you to sign in again:** banks do this from time to time. You'll
-  see a notice on the Overview page. Choose **Reconnect** on the Connections page.
-- **Extra sign-in protection:** you can add a passkey or an authenticator app on
-  the **Security** page.
+  see it under **Needs you** on the Today page. Choose **Reconnect** in
+  **Settings → Connections**.
+- **If a transaction is in the wrong category:** open it and pick the right one. You
+  can apply that to every charge from the same place, and your choice sticks through
+  future updates. You can also leave a charge out of your totals, like a work expense
+  that gets reimbursed.
+- **To count a home, a car, or a loan from family:** choose **Add a home, car, or other
+  asset** at the bottom of the **Net worth** page. To leave an account out of your totals,
+  open the **⋯** menu on its row.
+- **In public:** the eye icon at the top hides every amount. Press **⌘K** or **Ctrl+K**
+  to jump anywhere or search your transactions.
+- **Extra sign-in protection:** you can add a passkey or an authenticator app in
+  **Settings → Security**.
 - **Showing it to someone:** every copy has a demo with sample data. Choose
   **Explore the interactive demo** on the sign-in page.
 
@@ -76,7 +86,7 @@ That's it. Your accounts update by themselves every morning.
   can sign in. Each copy of the app has exactly one login.
 - **Bank keys are encrypted** before they're saved to your database.
 
-If you ever want to cut off access, choose **Remove** on the Connections page.
+If you ever want to cut off access, choose **Remove** in **Settings → Connections**.
 That also cancels the connection with Plaid.
 
 ## Costs
@@ -105,8 +115,8 @@ app would create duplicates.
    pnpm plaid:import
    ```
 
-5. Reconnect Robinhood, if you used it, with **Add an investment account** on the
-   Connections page. Old Robinhood accounts stop counting toward your totals, but
+5. Reconnect Robinhood, if you used it, with **Add an investment account** in
+   **Settings → Connections**. Old Robinhood accounts stop counting toward your totals, but
    their history stays in your database.
 6. Clean up what's no longer used:
    - Delete the repository's GitHub Actions secrets and variables.

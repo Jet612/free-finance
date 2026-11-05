@@ -1,7 +1,6 @@
 "use client";
 
-import { TriangleAlert } from "lucide-react";
-
+import { Seal } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 
 export default function ErrorPage({
@@ -13,18 +12,15 @@ export default function ErrorPage({
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="max-w-md text-center">
-        <span className="mx-auto flex size-11 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-          <TriangleAlert className="size-5" />
-        </span>
-        <h1 className="mt-5 text-2xl font-semibold tracking-tight">
-          Something went wrong
+        <Seal className="mx-auto size-12 text-primary" />
+        <h1 className="wide mt-5 text-[1.75rem] font-semibold tracking-[-0.02em]">
+          This page didn&apos;t load
         </h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Your dashboard couldn&apos;t load. Please try again in a moment. If
-          this keeps happening, check that Supabase is connected in your Vercel
-          project.
+        <p className="mt-2 text-[0.9375rem] leading-6 text-muted-foreground">
+          Your data is safe. Try again in a moment. If this keeps happening, the
+          connection to your database may need a look in your Vercel project.
         </p>
-        <Button onClick={reset} className="mt-5">
+        <Button onClick={reset} size="lg" className="mt-5 h-10 px-4">
           Try again
         </Button>
       </div>

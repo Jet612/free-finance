@@ -1,77 +1,90 @@
 import Link from "next/link";
-import { ArrowLeft, Database, LockKeyhole } from "lucide-react";
 
 import { Brand } from "@/components/brand";
-import { MobileNavigation } from "@/components/mobile-navigation";
-import { NavLinks } from "@/components/nav-links";
+import { CommandMenu } from "@/components/command-menu";
+import { BottomNav, SectionTabs, TopNav } from "@/components/nav-links";
+import { PrivacyToggle } from "@/components/privacy-toggle";
+import { StaleNotice } from "@/components/stale-notice";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
+import type { StaleConnection } from "@/lib/data";
 
 export function DashboardShell({
   children,
   demo = false,
-  privateFooter,
+  accountMenu,
+  staleConnections = [],
 }: {
   children: React.ReactNode;
   demo?: boolean;
-  privateFooter?: React.ReactNode;
+  accountMenu?: React.ReactNode;
+  staleConnections?: StaleConnection[];
 }) {
   const appName = process.env.APP_NAME ?? "Free Finance";
   const basePath = demo ? "/demo" : "";
 
   return (
-    <div className="min-h-screen bg-background">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[232px] border-r bg-sidebar lg:flex lg:flex-col">
-        <div className="flex h-[88px] items-center px-5">
-          <Brand name={appName} />
-        </div>
-        <div className="flex-1 overflow-y-auto px-3 py-3">
-          <NavLinks basePath={basePath} />
-        </div>
-        <div className="border-t p-3">
-          <div className="mb-2 flex items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-            {demo ? (
-              <Database className="size-3.5 text-primary" />
-            ) : (
-              <LockKeyhole className="size-3.5 text-primary" />
-            )}
-            {demo ? "Sample data · not saved" : "Private to you"}
-          </div>
-          {demo ? (
-            <Button
-              asChild
-              variant="ghost"
-              className="w-full justify-start text-muted-foreground"
-            >
-              <Link href="/login">
-                <ArrowLeft />
-                Exit demo
-              </Link>
-            </Button>
-          ) : privateFooter}
-        </div>
-      </aside>
+    <div className="min-h-screen">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:text-primary-foreground"
+      >
+        Skip to content
+      </a>
 
-      <div className="lg:pl-[232px]">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-background/88 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2">
-            <MobileNavigation name={appName} basePath={basePath} />
-            <div className="lg:hidden">
-              <Brand compact />
-            </div>
+      {demo && (
+        <div role="region" aria-label="Demo notice" className="bg-note text-note-foreground">
+          <div className="mx-auto flex max-w-[1180px] items-center justify-between gap-3 px-4 py-1.5 text-[0.8125rem] sm:px-6 lg:px-8">
+            <p>You&apos;re looking at sample data. None of it is real.</p>
+            <Link
+              href="/login"
+              className="shrink-0 font-medium underline underline-offset-3"
+            >
+              Exit demo
+            </Link>
           </div>
-          <div className="flex items-center gap-1">
-            <span className="mr-2 hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              {demo ? "Demo" : "Your dashboard"}
-            </span>
+        </div>
+      )}
+
+      <header className="sticky top-0 z-30 border-b bg-background">
+        <div className="mx-auto flex h-14 max-w-[1180px] items-center gap-6 px-4 sm:px-6 lg:px-8">
+          <Link
+            href={basePath || "/"}
+            aria-label={`${appName} home`}
+            className="rounded-md"
+          >
+            <Brand name={appName} />
+          </Link>
+          <TopNav basePath={basePath} />
+          <div className="ml-auto flex items-center gap-0.5">
+            <CommandMenu basePath={basePath} canSignOut={!demo} />
+            <PrivacyToggle />
             <ThemeToggle />
+            {accountMenu}
           </div>
-        </header>
-        <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8 xl:px-10">
-          {children}
-        </main>
-      </div>
+        </div>
+      </header>
+
+      <main
+        id="main"
+        className="mx-auto w-full max-w-[1180px] px-4 pb-28 pt-5 sm:px-6 lg:px-8 lg:pb-16 lg:pt-7"
+      >
+        <SectionTabs basePath={basePath} />
+        <StaleNotice connections={staleConnections} basePath={basePath} />
+        {children}
+      </main>
+
+      <BottomNav basePath={basePath} />
     </div>
+  );
+}
+
+export function SignOutButton({ action }: { action: () => Promise<void> }) {
+  return (
+    <form action={action}>
+      <Button type="submit" variant="ghost" size="sm" className="text-muted-foreground">
+        Sign out
+      </Button>
+    </form>
   );
 }

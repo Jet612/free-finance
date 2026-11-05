@@ -157,10 +157,11 @@ export async function dismissSubscription(formData: FormData): Promise<void> {
   // Re-derive the row server-side so merchant/category labels never come from
   // editable hidden inputs.
   const data = await getSubscriptionsData();
-  const subscription = data.subscriptions.find(
-    (item) =>
-      item.streamKey === parsed.data.streamKey && item.source === "Automatic",
-  );
+  const subscription =
+    data.subscriptions.find(
+      (item) =>
+        item.streamKey === parsed.data.streamKey && item.source === "Automatic",
+    ) ?? data.bills.find((item) => item.streamKey === parsed.data.streamKey);
   if (!subscription) return;
 
   const db = getDb();

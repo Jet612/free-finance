@@ -1,17 +1,26 @@
 import type { Metadata } from "next";
 
-import { DemoSubscriptionAddForm, DemoSubscriptionRuleButton } from "@/components/demo-actions";
+import { DemoSubscriptionRuleButton } from "@/components/demo-actions";
 import { SubscriptionsView } from "@/components/dashboard-views/subscriptions-view";
-import { mockSubscriptionsData } from "@/lib/demo-data";
+import { SubscriptionAddForm } from "@/components/subscription-add-form";
+import { getMockSubscriptionsData } from "@/lib/demo-data";
 
-export const metadata: Metadata = { title: "Subscriptions demo" };
+export const metadata: Metadata = { title: "Bills & subscriptions demo" };
 
 export default function DemoSubscriptionsPage() {
+  const data = getMockSubscriptionsData();
   return (
     <SubscriptionsView
-      data={mockSubscriptionsData}
-      addForm={<DemoSubscriptionAddForm transactions={mockSubscriptionsData.transactionChoices} />}
-      renderRuleButton={(subscription) => <DemoSubscriptionRuleButton mode={subscription.source === "Automatic" ? "dismiss" : "remove"} />}
+      data={data}
+      basePath="/demo"
+      renderBillButton={(bill) => <DemoSubscriptionRuleButton mode="dismiss" merchant={bill.merchant} />}
+      addForm={<SubscriptionAddForm transactions={data.transactionChoices} demo />}
+      renderRuleButton={(subscription) => (
+        <DemoSubscriptionRuleButton
+          mode={subscription.source === "Automatic" ? "dismiss" : "remove"}
+          merchant={subscription.merchant}
+        />
+      )}
     />
   );
 }
