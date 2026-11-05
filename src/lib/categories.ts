@@ -14,6 +14,7 @@ const CATEGORIES: Record<string, { label: string; color: string }> = {
   GOVERNMENT_AND_NON_PROFIT: { label: "Government & charity", color: OTHER_COLOR },
   HOME_IMPROVEMENT: { label: "Home", color: OTHER_COLOR },
   LOAN_PAYMENTS: { label: "Loan payments", color: OTHER_COLOR },
+  PAYMENT_APPS: { label: "Payment apps", color: OTHER_COLOR },
   BANK_FEES: { label: "Bank fees", color: OTHER_COLOR },
   INCOME: { label: "Income", color: OTHER_COLOR },
   TRANSFER_IN: { label: "Transfer in", color: OTHER_COLOR },

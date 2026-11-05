@@ -96,6 +96,22 @@ test("excludes rent even when amount and timing are consistent", () => {
   assert.equal(result.length, 0);
 });
 
+test("excludes payment apps even when amount and timing are consistent", () => {
+  const result = deriveSubscriptions(
+    ["2026-05-12", "2026-06-12", "2026-07-12"].map((date) =>
+      candidate(date, 20, {
+        merchant: "Venmo",
+        description: "Venmo monthly",
+        category: "PAYMENT_APPS",
+        categoryDetailed: null,
+      }),
+    ),
+    NOW,
+  );
+
+  assert.equal(result.length, 0);
+});
+
 test("excludes usage-based household bills even when marked monthly", () => {
   const utility = {
     merchant: "Example Electric",

@@ -122,6 +122,26 @@ describe("dashboard numbers", { skip: !databaseUrl }, () => {
     assert.equal(metrics.monthlyIncome, 0);
   });
 
+  test("money sent through a payment app is spending, money received isn't income", async () => {
+    const checking = await addAccount();
+    await addTransaction(checking.id, -275, {
+      categoryPrimary: "PAYMENT_APPS",
+      categoryDetailed: null,
+    });
+    await addTransaction(checking.id, 104, {
+      categoryPrimary: "TRANSFER_IN",
+      categoryDetailed: "TRANSFER_IN_TRANSFER_IN_FROM_APPS",
+    });
+
+    const { metrics, spending } = await data.getDashboardData();
+    assert.equal(metrics.monthlySpending, 275);
+    assert.equal(metrics.monthlyIncome, 0);
+    assert.deepEqual(
+      spending.map((item) => item.category),
+      ["PAYMENT_APPS"],
+    );
+  });
+
   test("real loan payments still count as spending", async () => {
     const checking = await addAccount();
     await addTransaction(checking.id, -1500, {

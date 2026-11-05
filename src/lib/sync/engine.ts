@@ -227,6 +227,18 @@ async function syncItem(
       where coalesce(t.merchant_name, t.name) = rules.merchant
         and t.category_locked = false
     `);
+    // Plaid calls money sent through Venmo, Cash App, or Zelle a transfer, but
+    // it's paying someone, so it counts as spending. Money received isn't touched:
+    // it stays out of income and doesn't lower spending.
+    await tx.execute(sql`
+      update public.transactions
+      set
+        category_primary = 'PAYMENT_APPS',
+        category_detailed = null,
+        updated_at = now()
+      where category_detailed = 'TRANSFER_OUT_TRANSFER_OUT_FROM_APPS'
+        and category_locked = false
+    `);
     // The paying bank often can't tell a card from a loan, so Plaid may file a
     // card payment as a generic loan payment, which would count as spending. The
     // card receiving the same amount proves what it was. This checks all history

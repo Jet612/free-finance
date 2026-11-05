@@ -573,6 +573,94 @@ describe("sync engine", { skip: !databaseUrl }, () => {
     });
   });
 
+  describe("payment apps", () => {
+    function categorized(
+      id: string,
+      amount: number,
+      primary: string,
+      detailed: string,
+    ) {
+      return {
+        ...plaidTransaction(id, "a1", amount),
+        personal_finance_category: { primary, detailed },
+      };
+    }
+
+    const sent = categorized(
+      "sent",
+      275,
+      "TRANSFER_OUT",
+      "TRANSFER_OUT_TRANSFER_OUT_FROM_APPS",
+    );
+
+    async function category(externalId: string) {
+      const rows = await db.select().from(schema.transactions);
+      return rows.find((row) => row.externalId === externalId)?.categoryPrimary;
+    }
+
+    test("files money sent as spending, and nothing else that moved", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("a1")],
+        pages: [
+          {
+            added: [
+              sent,
+              categorized(
+                "received",
+                -104,
+                "TRANSFER_IN",
+                "TRANSFER_IN_TRANSFER_IN_FROM_APPS",
+              ),
+              categorized(
+                "to-savings",
+                500,
+                "TRANSFER_OUT",
+                "TRANSFER_OUT_SAVINGS",
+              ),
+            ],
+          },
+        ],
+      });
+      await engine.runSync("manual");
+
+      assert.equal(await category("sent"), "PAYMENT_APPS");
+      assert.equal(await category("received"), "TRANSFER_IN");
+      assert.equal(await category("to-savings"), "TRANSFER_OUT");
+    });
+
+    test("keeps the category when the bank resends the payment", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("a1")],
+        pages: [{ added: [sent] }],
+      });
+      await engine.runSync("manual");
+
+      fakeItems.get("token-1")!.pages = [{}, { modified: [sent] }];
+      await engine.runSync("manual");
+
+      assert.equal(await category("sent"), "PAYMENT_APPS");
+    });
+
+    test("respects a category the owner picked", async () => {
+      await connect("item-1", "token-1", {
+        accounts: [account("a1")],
+        pages: [{ added: [plaidTransaction("t1", "a1", 5)] }],
+      });
+      await engine.runSync("manual");
+      await db.execute(drizzleSql`
+        update public.transactions
+        set
+          category_primary = 'TRANSFER_OUT',
+          category_detailed = 'TRANSFER_OUT_TRANSFER_OUT_FROM_APPS',
+          category_locked = true
+      `);
+
+      await engine.runSync("manual");
+
+      assert.equal(await category("t1"), "TRANSFER_OUT");
+    });
+  });
+
   test("runs at most once a day on schedule, but a person can still refresh", async () => {
     await connect("item-1", "token-1", { accounts: [account("a1")] });
 

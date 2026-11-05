@@ -146,6 +146,14 @@ describe("cashFlowTotals", () => {
     assert.deepEqual(totals, { income: 2000, spending: 40, notCounted: 5 });
   });
 
+  it("counts money sent through a payment app as spending", () => {
+    const totals = cashFlowTotals([
+      row({ amount: -275, category: "PAYMENT_APPS" }),
+      row({ amount: 104, category: "TRANSFER_IN" }),
+    ]);
+    assert.deepEqual(totals, { income: 0, spending: 275, notCounted: 1 });
+  });
+
   it("treats a refund as less spending, not as income", () => {
     const totals = cashFlowTotals([
       row({ amount: -100 }),
